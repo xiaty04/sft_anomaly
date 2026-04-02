@@ -33,19 +33,19 @@ AnomLLM/
 
 ## 阶段总览
 
-| 阶段 | 目标 | 主要产物 |
-| --- | --- | --- |
-| 0 | 初始化环境 | 运行目录、依赖 |
-| 1 | 获取 AnomLLM 代码和数据 | 仓库、data.pkl × 子集 |
-| 2 | VLM baseline | `results/synthetic/<subset>/qwen-local/*.jsonl` |
-| 3 | 统计 baseline | `results/synthetic/<subset>/isolation-forest/0shot.jsonl` |
-| 4 | 汇总 baseline 对比 | `results/agg/*.pkl`、`baseline_compare.csv` |
-| 5 | 构建 SFT 样本清单 | `sft_manifest.csv`（含 train/val/eval split） |
-| 6 | 教师蒸馏 | `sft_raw.jsonl` → `sft_final.jsonl` |
-| 7 | 转成 Unsloth 训练格式 | `train.jsonl`、`val.jsonl`、`eval.jsonl` |
-| 8 | SFT | adapter、merged model |
-| 9 | 对比 SFT 与 baseline | `sft_eval_metrics.csv` |
-| 10 | 可选 GRPO | grpo 模型与结果 |
+| 阶段 | 目标 | 主要产物 | 断点 |
+| --- | --- | --- | --- |
+| 0 | 初始化环境 | 运行目录、依赖 | |
+| 1 | 获取 AnomLLM 代码和数据 | 仓库、data.pkl × 子集 | ⏸ BPA |
+| 2 | VLM baseline | `results/synthetic/<subset>/qwen-local/*.jsonl` | |
+| 3 | 统计 baseline | `results/synthetic/<subset>/isolation-forest/0shot.jsonl` | |
+| 4 | 汇总 baseline 对比 | `results/agg/*.pkl`、`baseline_compare.csv` | ⏸ BPB |
+| 5 | 构建 SFT 样本清单 | `sft_manifest.csv`（含 train/val/eval split） | |
+| 6 | 教师蒸馏 | `sft_raw.jsonl` → `sft_final.jsonl` | |
+| 7 | 转成 Unsloth 训练格式 | `train.jsonl`、`val.jsonl`、`eval.jsonl` | |
+| 8 | SFT 冒烟 → 完整训练 | adapter、merged model | ⏸ BPC |
+| 9 | 对比 SFT 与 baseline | `sft_eval_metrics.csv` | ⏸ BPD |
+| 10 | 可选 GRPO | grpo 模型与结果 | |
 
 ---
 
@@ -146,6 +146,9 @@ for subset in ["point", "range", "freq", "flat-trend"]:
 DATASETS = ["flat-trend", "range", "point", "freq"]
 ```
 
+> **⏸ BPA — 对应 action_plan 检查点 A**
+> 执行完 Cell 1.4 后暂停。确认 GPU 型号/VRAM/BF16，以及四个子集 series 数量、has_figs，目视一张 PNG，告诉 Claude Code 后继续。
+
 ---
 
 ## 阶段 2. VLM Baseline
@@ -172,7 +175,9 @@ qwen-local:
 (ANOMLLM / "credentials.yml").write_text(creds)
 ```
 
-**Cell 2.3** 跑 VLM baseline（AnomLLM 官方脚本）
+**Cell 2.3** 跑 VLM baseline 全量（AnomLLM 官方脚本）
+
+> **内联冒烟**：`point` 子集的 jsonl 出现前几行后，先执行 `head -3 results/synthetic/point/qwen-local/0shot-vision.jsonl`，确认 response 为 `[{"start":...,"end":...},...]` 格式、无报错，再让循环继续。
 
 ```bash
 cd /content/tsad_runtime/code/AnomLLM
@@ -235,6 +240,9 @@ for datum in ["flat-trend", "range", "point", "freq"]:
 
 pd.concat(frames).to_csv("/content/tsad_runtime/results/baseline_compare.csv")
 ```
+
+> **⏸ BPB — 对应 action_plan 检查点 B**
+> 执行完 Cell 4.2 后暂停。用 `wc -l` 确认各 jsonl 均 400 行，打印 `baseline_compare.csv` 全文告诉 Claude Code。
 
 ---
 
@@ -305,6 +313,8 @@ TEACHER_TEMPERATURE = 0.2
 ```
 
 **Cell 6.2** 生成蒸馏数据（只对 train + val 调用教师）
+
+> 先加 `.head(20)` 跑 20 条确认质量，再去掉限制跑全量。
 
 ```python
 import base64, json, pandas as pd
@@ -469,6 +479,8 @@ val_dataset   = load_dataset("json", data_files=str(RT_SFT / "val.jsonl"),   spl
 
 **Cell 8.2** 训练
 
+> 先加 `max_steps=5` 跑冒烟，确认后去掉再跑完整训练。
+
 ```python
 from trl import SFTConfig, SFTTrainer
 from unsloth.trainer import UnslothVisionDataCollator
@@ -503,6 +515,9 @@ trainer = SFTTrainer(
 
 trainer.train()
 ```
+
+> **⏸ BPC — 对应 action_plan 检查点 C**
+> 加 `max_steps=5` 跑完 Cell 8.2 冒烟后暂停。确认蒸馏保留率、格式（image exists）、冒烟前 5 步 loss 在 1.5~4，无 OOM，告诉 Claude Code 后去掉 `max_steps=5` 跑完整训练，再跑 Cell 8.3 导出。
 
 **Cell 8.3** 导出模型
 
@@ -599,6 +614,9 @@ summary = result_df.groupby("method")[["f1", "affi f1"]].mean().round(3)
 print(summary)
 summary.to_csv("/content/tsad_runtime/results/sft_eval_metrics.csv")
 ```
+
+> **⏸ BPD — 对应 action_plan 检查点 D**
+> 执行完 Cell 9.2 后暂停。查看 summary 表，对比三种方法 avg F1，告诉 Claude Code 是否进入 GRPO 阶段。
 
 ---
 
