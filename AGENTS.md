@@ -28,7 +28,6 @@ AnomLLM/src/                  # 上游框架代码
   config.py                   # 模型配置
   online_api.py               # 在线推理与重试逻辑
   baselines/isoforest.py      # Isolation Forest 基线
-tsad_sft_pipeline_issues.md   # 已知问题与修复建议
 notebook_guide.md             # 分阶段 Notebook 使用指南
 ```
 
@@ -38,12 +37,6 @@ notebook_guide.md             # 分阶段 Notebook 使用指南
 - 训练：Unsloth + TRL SFTTrainer，4-bit quantization，LoRA（rank=16，alpha=16）
 - 推理：vLLM（OpenAI-compatible API）
 - 指标：point-wise F1，affiliation F1
-
-## 已知问题（见 `tsad_sft_pipeline_issues.md`）
-
-1. **输出格式不匹配** —— 训练输出是 XML 风格，评估阶段期望纯 JSON
-2. **输入 / prompt 不匹配** —— 训练时的消息顺序与 AnomLLM 约定不一致
-3. 清洗逻辑较弱、重启后数据重复、YAML 键重复
 
 ## 约定
 

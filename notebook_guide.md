@@ -85,15 +85,15 @@
 | Cell | 功能 |
 |------|------|
 | **6.1** | 设置 DashScope API Key 和教师模型（qwen3.5-plus） |
-| **6.2** | 调用教师模型对 train+val 样本做标注，生成 `sft_raw.jsonl`。默认先跑 20 条冒烟 |
-| **6.3** | 自动清洗：保留 label 一致 + intervals 格式合法的样本，输出 `sft_final.jsonl` |
+| **6.2** | 调用教师模型对 train+val 样本做标注，生成 `sft_raw.jsonl`。默认先跑 20 条冒烟，重跑时覆盖旧文件 |
+| **6.3** | 自动清洗：保留 label 一致、`is_anomaly` 与 `intervals` 一致、且 intervals 结构合法的样本，输出 `sft_final.jsonl` |
 
 ### 阶段 7：转训练格式
 
 | Cell | 功能 |
 |------|------|
-| **7.1** | 将 `sft_final.jsonl` 转为 Unsloth messages 格式（image + text），输出 `train.jsonl` / `val.jsonl` |
-| **7.2** | eval split 单独转（只含 user turn，用于推理），输出 `eval.jsonl` |
+| **7.1** | 将 `sft_final.jsonl` 转为 Unsloth messages 格式（text + image），assistant 输出为 JSON 区间列表，输出 `train.jsonl` / `val.jsonl` |
+| **7.2** | eval split 单独转为评估元数据，输出 `eval.jsonl` |
 
 ### 阶段 8：SFT 训练
 
@@ -105,13 +105,13 @@
 
 ### 检查点 C
 
-打印蒸馏样本前 5 条、清洗保留率、训练格式验证（image exists / label 格式）。
+打印蒸馏样本前 5 条、清洗保留率、训练格式验证（image exists / assistant JSON 格式）。
 
 ### 阶段 9：最终对比
 
 | Cell | 功能 |
 |------|------|
-| **9.1** | 启动 SFT 模型的 vLLM server（端口 8001），对 4 个子集跑推理 |
+| **9.1** | 启动 SFT 模型的 vLLM server（端口 8001），更新 `credentials.yml` 中的 `sft-model`，对 4 个子集跑推理 |
 | **9.2** | 在相同的 eval 150 条上计算 isolation-forest / qwen-local-0shot / sft-0shot 三种方法的 F1 对比 |
 
 ### 检查点 D
@@ -196,9 +196,9 @@
 │   ├── sft_manifest.csv       # 样本清单（含 split）
 │   ├── sft_raw.jsonl          # 教师蒸馏原始输出
 │   ├── sft_final.jsonl        # 清洗后的蒸馏数据
-│   ├── train.jsonl            # Unsloth 训练格式
+│   ├── train.jsonl            # Unsloth 训练格式（text + image，assistant 为 JSON 区间列表）
 │   ├── val.jsonl              # 验证集
-│   ├── eval.jsonl             # 评估集
+│   ├── eval.jsonl             # 评估元数据
 │   ├── qwen3vl-tsad-merged/   # 导出的完整模型
 │   └── qwen3vl-tsad-adapter/  # LoRA adapter
 ├── checkpoints/               # 训练 checkpoint

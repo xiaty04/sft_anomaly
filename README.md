@@ -71,7 +71,6 @@ SFT 推理 ──────────────── 对比评估（F1 / 
 │       ├── utils.py             # 输出解析、指标计算
 │       ├── online_api.py        # 在线推理入口
 │       └── data/synthetic.py    # 合成数据生成
-├── tsad_sft_pipeline_issues.md  # 已知问题与修改方案
 ├── notebook_guide.md            # Notebook 各阶段详细说明
 └── archieve/                    # 历史计划文档
 ```
@@ -79,4 +78,3 @@ SFT 推理 ──────────────── 对比评估（F1 / 
 ## 文档
 
 - [Notebook 使用指南](notebook_guide.md) — 各阶段 Cell 说明、参数配置、检查点、运行步骤
-- [修改方案](tsad_sft_pipeline_issues.md) — 静态审查发现的协议不一致问题及修复方案
