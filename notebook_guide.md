@@ -16,10 +16,10 @@
 | 4 | 4.1 – 4.2 | 汇总 Baseline 对比 | `baseline_compare.csv` |
 | **⏸ B** | 验证 cell | **检查点：确认 Baseline 指标** | — |
 | 5 | 5.1 | 构建 SFT 样本清单 | `sft_manifest.csv` |
-| 6 | 6.1 – 6.3 | 教师蒸馏 + 自动清洗 | `sft_final.jsonl` |
+| 6 | 6.1 – 6.2b – 6.3 | 教师蒸馏（冒烟→全量）+ 自动清洗 | `sft_final.jsonl` |
 | 7 | 7.1 – 7.2 | 转 Unsloth 训练格式 | `train.jsonl` / `val.jsonl` / `eval.jsonl` |
-| 8 | 8.1 – 8.3 | SFT 训练 + 导出模型 | LoRA adapter + merged model |
-| **⏸ C** | 验证 cell | **检查点：确认训练冒烟通过** | — |
+| 8 | 8.1 – 8.2b – 8.3 | SFT 训练（冒烟→完整）+ 导出模型 | LoRA adapter + merged model |
+| **⏸ C** | 验证 cell | **检查点：确认训练完成** | — |
 | 9 | 9.1 – 9.2 | 对比 SFT 与 Baseline | `sft_eval_metrics.csv` |
 | **⏸ D** | 验证 cell | **检查点：查看最终对比** | — |
 | 10 | — | 可选 GRPO 强化学习 | — |
@@ -34,7 +34,7 @@
 |------|------|
 | **0.1** | 挂载 Google Drive，用于持久化存储数据和模型 |
 | **0.2** | 定义运行目录常量（`RUNTIME`、`DRIVE_ROOT` 等），创建所有必要目录 |
-| **0.3** | 安装 Python 依赖：unsloth、vllm、openai、accelerate、bitsandbytes、scikit-learn 等 |
+| **0.3** | 安装 Python 依赖：unsloth、vllm、openai、accelerate、bitsandbytes、scikit-learn，以及 AnomLLM 依赖的 `loguru` / `google-generativeai` / `affiliation` |
 
 ### 阶段 1：获取数据
 
@@ -53,7 +53,7 @@
 
 | Cell | 功能 |
 |------|------|
-| **2.1** | 后台启动 vLLM 服务，加载 `Qwen/Qwen3-VL-8B-Instruct`，端口 8000 |
+| **2.1** | 用 `nohup` 后台启动 vLLM 服务，加载 `Qwen/Qwen3-VL-8B-Instruct`，端口 8000 |
 | **2.2** | 写 `credentials.yml`（本地 API 地址），供 AnomLLM 脚本读取 |
 | **2.3** | 用 `online_api.py` 对 4 个子集各 400 条跑 VLM zero-shot 视觉推理 |
 
@@ -85,7 +85,8 @@
 | Cell | 功能 |
 |------|------|
 | **6.1** | 设置 DashScope API Key 和教师模型（qwen3.5-plus） |
-| **6.2** | 调用教师模型对 train+val 样本做标注，生成 `sft_raw.jsonl`。默认先跑 20 条冒烟，重跑时覆盖旧文件 |
+| **6.2a** | 冒烟：对前 20 条调用教师模型，输出 `sft_raw_smoke.jsonl`；打印 `is_anomaly` 一致率和 intervals 格式合法率，≥ 70% 才继续 |
+| **6.2b** | 全量蒸馏：对全部 train+val 样本调用教师模型，输出 `sft_raw.jsonl` |
 | **6.3** | 自动清洗：保留 label 一致、`is_anomaly` 与 `intervals` 一致、且 intervals 结构合法的样本，输出 `sft_final.jsonl` |
 
 ### 阶段 7：转训练格式
@@ -100,18 +101,19 @@
 | Cell | 功能 |
 |------|------|
 | **8.1** | 加载 `Qwen3-VL-8B-Instruct` 4bit 量化模型，添加 LoRA（r=16, all-linear），加载训练/验证数据 |
-| **8.2** | 启动 SFT 训练。默认 `max_steps=5` 冒烟模式，确认无 OOM 后注释掉该行跑完整训练 |
+| **8.2a** | 冒烟训练（`max_steps=5`，`lr=2e-5`，`batch=1`）：验证流程无 OOM、loss 非 nan；检查 loss 曲线在合理范围（1.5~4）后继续 |
+| **8.2b** | 完整训练：先释放冒烟模型、清理显存，再重新加载模型并以完整配置（无 `max_steps`，`lr=1e-4`，`batch=2`）训练 3 个 epoch |
 | **8.3** | 导出 merged model 和 LoRA adapter 到 sft 目录 |
 
 ### 检查点 C
 
-打印蒸馏样本前 5 条、清洗保留率、训练格式验证（image exists / assistant JSON 格式）。
+打印蒸馏样本前 5 条（来自 `sft_raw.jsonl`）、训练格式验证（image exists / assistant JSON 格式）。检查 loss 曲线正常收敛后再运行 Cell 8.3 导出。
 
 ### 阶段 9：最终对比
 
 | Cell | 功能 |
 |------|------|
-| **9.1** | 启动 SFT 模型的 vLLM server（端口 8001），更新 `credentials.yml` 中的 `sft-model`，对 4 个子集跑推理 |
+| **9.1** | 用 `nohup` 后台启动 SFT 模型的 vLLM server（端口 8001），更新 `credentials.yml` 中的 `sft-model`，对 4 个子集跑推理 |
 | **9.2** | 在相同的 eval 150 条上计算 isolation-forest / qwen-local-0shot / sft-0shot 三种方法的 F1 对比 |
 
 ### 检查点 D
@@ -132,11 +134,10 @@
 
 | 参数 | 位置 | 默认值 | 何时修改 |
 |------|------|--------|----------|
-| `per_device_train_batch_size` | Cell 8.2 | `2` | OOM → 改为 `1` |
-| `learning_rate` | Cell 8.2 | `1e-4` | loss=nan → 降至 `2e-5` |
-| `max_steps` | Cell 8.2 | `5`（冒烟） | 冒烟通过后**注释掉** |
-| `num_train_epochs` | Cell 8.2 | `3` | 可根据 loss 曲线增减 |
-| `gradient_accumulation_steps` | Cell 8.2 | `8` | 降 batch_size 时相应增大 |
+| `per_device_train_batch_size` | Cell 8.2b | `2` | OOM → 改为 `1` |
+| `learning_rate` | Cell 8.2b | `1e-4` | loss=nan → 降至 `2e-5` |
+| `num_train_epochs` | Cell 8.2b | `3` | 可根据 loss 曲线增减 |
+| `gradient_accumulation_steps` | Cell 8.2b | `8` | 降 batch_size 时相应增大 |
 | `TEACHER_MODEL` | Cell 6.1 | `"qwen3.5-plus"` | 可换其他 DashScope VLM |
 | `TEACHER_TEMPERATURE` | Cell 6.1 | `0.2` | 一般不需改 |
 | `DATASETS` | Cell 1.4 | 4 个子集 | 如只跑部分子集可修改 |
@@ -161,10 +162,10 @@
 3. 在 **检查点 A** 暂停，确认 GPU/数据/BF16 正常
 4. 继续执行 Cell 2.1 → 2.2 → 2.3 → 3.1 → 4.1 → 4.2
 5. 在 **检查点 B** 暂停，确认 baseline jsonl 各 400 行、F1 非零
-6. 继续执行 Cell 5.1 → 6.1（**填入 API Key**）→ 6.2（先跑 20 条冒烟）→ 6.3 → 7.1 → 7.2
-7. 执行 Cell 8.1 → 8.2（`max_steps=5` 冒烟）
-8. 在 **检查点 C** 暂停，确认 loss 在 1.5~4、无 OOM
-9. **注释掉 `max_steps=5`**，重新运行 Cell 8.2 跑完整训练 → 运行 Cell 8.3 导出
+6. 继续执行 Cell 5.1 → 6.1（**填入 API Key**）→ 6.2a（冒烟 20 条，确认质量 ≥ 70%）→ 6.2b（全量蒸馏）→ 6.3 → 7.1 → 7.2
+7. 执行 Cell 8.1 → 8.2a（冒烟 5 步，确认 loss 在 1.5~4、无 OOM）
+8. 确认冒烟通过后执行 Cell 8.2b 跑完整训练
+9. 在 **检查点 C** 暂停，确认训练正常收敛，然后运行 Cell 8.3 导出
 10. 执行 Cell 9.1 → 9.2，在 **检查点 D** 查看对比结果
 
 ### 断线恢复
@@ -177,8 +178,10 @@
 |--------|----------|
 | A | GPU A100 / BF16 True / 四子集各 400 条 / has_figs True |
 | B | 各 jsonl 400 行 / VLM F1 在 0.2~0.7 |
-| C | 蒸馏保留率 ≥ 70% / 冒烟 loss 1.5~4 / 无 OOM |
+| C | 蒸馏保留率 ≥ 70% / 完整训练 loss 正常收敛 / 格式验证通过 |
 | D | SFT F1 > VLM zero-shot F1（差 ≥ 0.03 为有效提升） |
+
+补充说明：`Cell 2.1` / `9.1` 现在使用 `nohup ... > /tmp/*.log 2>&1 &` 后台启动，cell 会很快结束；若后续推理失败，优先查看 `/tmp/vllm.log` 或 `/tmp/sft-vllm.log`。
 
 ---
 
