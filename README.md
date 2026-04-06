@@ -64,7 +64,9 @@ SFT 推理 ──────────────── 对比评估（F1 / 
 
 ```
 .
-├── tsad_sft_pipeline.ipynb      # 完整 pipeline notebook
+├── tsad_sft_pipeline.ipynb       # Part 1：环境初始化 → Baseline 评估 → 检查点 B
+├── tsad_sft_pipeline_part2.ipynb # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
+├── tsad_sft_pipeline_part3.ipynb # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
 ├── AnomLLM/                     # 上游框架（数据生成、推理、评测）
 │   └── src/
 │       ├── prompt.py            # VLM prompt 和消息构造

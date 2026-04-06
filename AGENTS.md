@@ -21,7 +21,9 @@ TSAD-SFT：基于视觉 SFT 微调的时间序列异常检测项目。该项目�
 ## 文件结构
 
 ```
-tsad_sft_pipeline.ipynb       # 完整流水线 Notebook（仅在 Colab 上运行）
+tsad_sft_pipeline.ipynb       # Part 1：环境初始化 → Baseline 评估 → 检查点 B
+tsad_sft_pipeline_part2.ipynb # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
+tsad_sft_pipeline_part3.ipynb # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
 AnomLLM/src/                  # 上游框架代码
   prompt.py                   # VLM 提示词与消息格式化
   utils.py                    # 输出解析、F1 / Affiliation 指标
@@ -47,7 +49,7 @@ notebook_guide.md             # 分阶段 Notebook 使用指南
 
 ## Notebook 固定细节速查
 
-下面是 `tsad_sft_pipeline.ipynb` 中已经写死的关键细节。后续 agent 默认以这里为准，除非用户明确要求改 notebook。
+下面是当前三本 notebook 中已经写死的关键细节。后续 agent 默认以这里为准，除非用户明确要求改 notebook。
 
 ### 运行目录与持久化路径
 
@@ -76,7 +78,15 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `PYTHONPATH` 在 notebook 中被设置为 `/content/tsad_runtime/code/AnomLLM/src`
 - 固定子集顺序：`DATASETS = ["flat-trend", "range", "point", "freq"]`
 
+### Notebook 划分
+
+- `tsad_sft_pipeline.ipynb`：阶段 `0-4`，并在检查点 B 后把 baseline/data 中间产物打包到 Drive 的 `before_ckptB_*.tar.gz`
+- `tsad_sft_pipeline_part2.ipynb`：阶段 `0-B`、`5-7`，并在阶段 7 末尾把蒸馏产物和后续评估所需文件打包到 Drive 的 `before_stage8_*.tar.gz`
+- `tsad_sft_pipeline_part3.ipynb`：阶段 `0-C`、`8-10`，只恢复 `before_stage8_*.tar.gz` 后继续训练、导出和评估
+
 ### Notebook 阶段与实际动作
+
+#### `tsad_sft_pipeline.ipynb`
 
 - `0.1`：`drive.mount("/content/drive")`
 - `0.2`：创建运行目录和 Drive 持久化目录
@@ -104,6 +114,12 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `4.1`：对每个子集跑 `src/result_agg.py`，产出 `results/agg/{subset}.pkl`
 - `4.2`：把四个 `pkl` 合并成 `/content/tsad_runtime/results/baseline_compare.csv`
 - `检查点 B`：`qwen-local/0shot-vision.jsonl` 和 `isolation-forest/0shot.jsonl` 都应各 400 行；Baseline F1 经验期望在 `0.2~0.7`
+- 检查点 B 后的备份 cell：把 baseline JSONL、agg PKL、`baseline_compare.csv`、4 个子集的 `eval/data.pkl` 与 `figs/` 打包到 `before_ckptB_*.tar.gz`
+
+#### `tsad_sft_pipeline_part2.ipynb`
+
+- `0-B.1`：挂载 Drive、定义运行目录、安装依赖
+- `0-B.2`：恢复最新 `before_ckptB_*.tar.gz`，并校验 `baseline_compare.csv`、4 个 `data.pkl`、各子集 baseline JSONL / agg PKL
 - `5.1`：从 4 个子集的 `eval/data.pkl` 提取 1600 条样本，构建 `sft_manifest.csv`
 - `6.1`：设置 DashScope 教师模型，notebook 中唯一需要手工填写的是 `DASHSCOPE_API_KEY`
 - `6.2a`：只蒸馏前 20 条，输出 `sft_raw_smoke.jsonl`
@@ -111,11 +127,21 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `6.3`：清洗蒸馏结果，输出 `sft_final.jsonl`
 - `7.1`：把 `sft_final.jsonl` 转成 Unsloth `messages` 训练格式，输出 `train.jsonl` 和 `val.jsonl`
 - `7.2`：把 `eval` split 单独导出成 `eval.jsonl`
+- `7.3`：把 `sft_manifest.csv`、`sft_raw_smoke.jsonl`、`sft_raw.jsonl`、`sft_final.jsonl`、`train.jsonl`、`val.jsonl`、`eval.jsonl`，以及阶段 9 仍需用到的 baseline/data 文件打包到 `before_stage8_*.tar.gz`
+
+#### `tsad_sft_pipeline_part3.ipynb`
+
+- `0-C.1`：挂载 Drive、定义运行目录、安装依赖
+- `0-C.2`：恢复最新 `before_stage8_*.tar.gz`，并校验：
+  - `sft_manifest.csv` 的 split 分布必须是 `train=1280 / val=160 / eval=160`
+  - `train.jsonl`、`val.jsonl`、`eval.jsonl`、`sft_final.jsonl` 必须存在且非空
+  - 抽样解析一条 `train.jsonl`，确认 image 路径存在、assistant 可解析为区间列表
+  - 四个子集的 baseline JSONL 与 `data.pkl` 仍可读取
 - `8.1`：加载 `unsloth/Qwen3-VL-8B-Instruct-bnb-4bit` 并挂 LoRA
 - `8.2a`：冒烟训练 5 步，只验证流程、OOM 和 nan
 - `8.2b`：清显存后重新加载干净模型，跑完整训练
-- `8.3`：导出 merged model 和 adapter
 - `检查点 C`：先查看 loss 曲线、蒸馏前 5 条样本、`train.jsonl` 中 image/assistant JSON 是否正常，再执行导出
+- `8.3`：导出 merged model 和 adapter
 - `9.1`：后台启动 merged model 的 vLLM 服务，地址 `127.0.0.1:8001`，served model name 为 `sft-model`，日志在 `/tmp/sft-vllm.log`
 - `9.2`：只在 `eval` 的 160 条样本上，对 `isolation-forest`、`qwen-local-0shot`、`sft-0shot` 做公平对比，输出 `sft_eval_metrics.csv`
 - `检查点 D`：看 SFT 是否相对 VLM zero-shot 提升至少 `0.03`；若要进入 GRPO，经验门槛是 `F1 提升 >= 0.05` 且蒸馏保留率 `>= 70%`
