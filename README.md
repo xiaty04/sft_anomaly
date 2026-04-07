@@ -1,10 +1,10 @@
 # TSAD-SFT: 时间序列异常检测的视觉 SFT 微调
 
-基于 [AnomLLM](https://github.com/Rose-STL-Lab/AnomLLM) 框架，通过教师蒸馏 + SFT 微调 Qwen3-VL，使其从时间序列折线图中检测异常区间。
+基于 [AnomLLM](https://github.com/Rose-STL-Lab/AnomLLM) 框架，通过教师蒸馏 + SFT 微调 + GRPO 强化学习 Qwen3-VL，使其从时间序列折线图中检测异常区间。
 
 ## 项目动机
 
-AnomLLM 提出用 VLM 零样本识别时间序列异常，但零样本推理精度有限。本项目在其基础上加入 SFT 环节：用强教师模型标注合成数据，再微调一个轻量 VLM，验证 SFT 能否提升检测指标。
+AnomLLM 提出用 VLM 零样本识别时间序列异常，但零样本推理精度有限。本项目在其基础上加入 SFT + GRPO 两个阶段：先用强教师模型标注合成数据并微调一个轻量 VLM（SFT），再通过 F1 驱动的 GRPO 强化学习进一步优化，验证逐步训练能否持续提升检测指标。
 
 ## 整体流程
 
@@ -12,19 +12,22 @@ AnomLLM 提出用 VLM 零样本识别时间序列异常，但零样本推理精�
 合成数据（AnomLLM）
     │
     ▼
-VLM Baseline ──────────────────────────────┐
-    │                                      │
-    ▼                                      │
-教师蒸馏（qwen3.5-plus 标注）              │
-    │                                      │
-    ▼                                      │
-自动清洗（label 一致性 + intervals 校验）   │
-    │                                      │
-    ▼                                      │
-SFT 训练（Qwen3-VL + LoRA + Unsloth）     │
-    │                                      │
-    ▼                                      ▼
-SFT 推理 ──────────────── 对比评估（F1 / Affi-F1）
+VLM Baseline ──────────────────────────────────────────┐
+    │                                                  │
+    ▼                                                  │
+教师蒸馏（qwen3.5-plus 标注）                          │
+    │                                                  │
+    ▼                                                  │
+自动清洗（label 一致性 + intervals 校验）               │
+    │                                                  │
+    ▼                                                  │
+SFT 训练（Qwen3-VL + LoRA + Unsloth）                 │
+    │                                                  │
+    ▼                                                  │
+GRPO 强化学习（F1 task reward + Unsloth）              │
+    │                                                  │
+    ▼                                                  ▼
+GRPO 推理 ──────────────── 对比评估（F1 / Affi-F1）
 ```
 
 ## 关键组件
@@ -35,6 +38,7 @@ SFT 推理 ──────────────── 对比评估（F1 / 
 | **教师模型** | DashScope 上的 qwen3.5-plus，对折线图做异常标注 |
 | **学生模型** | Qwen3-VL-8B-Instruct，4bit 量化 + LoRA 微调 |
 | **训练框架** | Unsloth + TRL SFTTrainer |
+| **GRPO 奖励** | F1 task reward：将模型输出解析为区间，与 GT 计算点级 F1 作为奖励信号 |
 | **推理服务** | vLLM（本地 OpenAI 兼容 API） |
 
 ## 数据
@@ -53,7 +57,7 @@ SFT 推理 ──────────────── 对比评估（F1 / 
 沿用 AnomLLM 的评估方式：
 1. 模型输入折线图，输出 JSON 区间列表 `[{"start": ..., "end": ...}, ...]`
 2. 区间转为 0/1 向量后，计算 point-wise F1 和 affiliation F1
-3. 在相同的 eval 子集上对比 Isolation Forest / VLM zero-shot / SFT 三种方法
+3. 在相同的 eval 子集上对比 Isolation Forest / VLM zero-shot / SFT / GRPO 四种方法
 
 ## 运行环境
 
@@ -64,9 +68,10 @@ SFT 推理 ──────────────── 对比评估（F1 / 
 
 ```
 .
-├── tsad_sft_pipeline.ipynb       # Part 1：环境初始化 → Baseline 评估 → 检查点 B
-├── tsad_sft_pipeline_part2.ipynb # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
-├── tsad_sft_pipeline_part3.ipynb # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
+├── part1.ipynb                  # Part 1：环境初始化 → Baseline 评估 → 检查点 B
+├── part2.ipynb                  # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备
+├── part3.ipynb                  # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
+├── part4.ipynb                  # Part 4：恢复 Part 3 模型 → GRPO 训练 → 评估
 ├── AnomLLM/                     # 上游框架（数据生成、推理、评测）
 │   └── src/
 │       ├── prompt.py            # VLM prompt 和消息构造

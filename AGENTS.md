@@ -9,6 +9,7 @@ TSAD-SFT：基于视觉 SFT 微调的时间序列异常检测项目。该项目�
 ```
 合成数据（4 类 x 400）→ VLM 零样本基线 → 教师蒸馏（qwen3.5-plus）
 → 自动清洗 → SFT 训练（Qwen3-VL-8B + LoRA + Unsloth）→ SFT 推理（vLLM）→ 评估（F1 / Affi-F1）
+→ GRPO 强化学习（F1 task reward + Unsloth）→ GRPO 评估（F1 / Affi-F1）
 ```
 
 ## 关键约束
@@ -21,9 +22,10 @@ TSAD-SFT：基于视觉 SFT 微调的时间序列异常检测项目。该项目�
 ## 文件结构
 
 ```
-tsad_sft_pipeline.ipynb       # Part 1：环境初始化 → Baseline 评估 → 检查点 B
-tsad_sft_pipeline_part2.ipynb # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
-tsad_sft_pipeline_part3.ipynb # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
+part1.ipynb                   # Part 1：环境初始化 → Baseline 评估 → 检查点 B
+part2.ipynb                   # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
+part3.ipynb                   # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
+part4.ipynb                   # Part 4：恢复 Part 3 模型 → GRPO 训练 → 评估
 AnomLLM/src/                  # 上游框架代码
   prompt.py                   # VLM 提示词与消息格式化
   utils.py                    # 输出解析、F1 / Affiliation 指标
@@ -80,13 +82,14 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 
 ### Notebook 划分
 
-- `tsad_sft_pipeline.ipynb`：阶段 `0-4`，并在检查点 B 后把 baseline/data 中间产物打包到 Drive 的 `before_ckptB_*.tar.gz`
-- `tsad_sft_pipeline_part2.ipynb`：阶段 `0-B`、`5-7`，并在阶段 7 末尾把蒸馏产物和后续评估所需文件打包到 Drive 的 `before_stage8_*.tar.gz`
-- `tsad_sft_pipeline_part3.ipynb`：阶段 `0-C`、`8-10`，只恢复 `before_stage8_*.tar.gz` 后继续训练、导出和评估
+- `part1.ipynb`：阶段 `0-4`，并在检查点 B 后把 baseline/data 中间产物打包到 Drive 的 `before_ckptB_*.tar.gz`
+- `part2.ipynb`：阶段 `0-B`、`5-7`，并在阶段 7 末尾把蒸馏产物和后续评估所需文件打包到 Drive 的 `before_stage8_*.tar.gz`
+- `part3.ipynb`：阶段 `0-C`、`8-10`，恢复 `before_stage8_*.tar.gz` 后继续训练、导出和评估；结果保存到 `part3_results_only_*.tar.gz`，模型保存到 `DRV_SFT/part3_models_*`
+- `part4.ipynb`：阶段 `0-D`、`11-13`，从 `DRV_SFT/part3_models_*` 恢复 SFT 合并模型，从 `part3_results_only_*.tar.gz` 恢复数据文件，执行 GRPO 训练和评估
 
 ### Notebook 阶段与实际动作
 
-#### `tsad_sft_pipeline.ipynb`
+#### `part1.ipynb`
 
 - `0.1`：`drive.mount("/content/drive")`
 - `0.2`：创建运行目录和 Drive 持久化目录
@@ -116,7 +119,7 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `检查点 B`：`qwen-local/0shot-vision.jsonl` 和 `isolation-forest/0shot.jsonl` 都应各 400 行；Baseline F1 经验期望在 `0.2~0.7`
 - 检查点 B 后的备份 cell：把 baseline JSONL、agg PKL、`baseline_compare.csv`、4 个子集的 `eval/data.pkl` 与 `figs/` 打包到 `before_ckptB_*.tar.gz`
 
-#### `tsad_sft_pipeline_part2.ipynb`
+#### `part2.ipynb`
 
 - `0-B.1`：挂载 Drive、定义运行目录、安装依赖
 - `0-B.2`：恢复最新 `before_ckptB_*.tar.gz`，并校验 `baseline_compare.csv`、4 个 `data.pkl`、各子集 baseline JSONL / agg PKL
@@ -129,7 +132,7 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `7.2`：把 `eval` split 单独导出成 `eval.jsonl`
 - `7.3`：把 `sft_manifest.csv`、`sft_raw_smoke.jsonl`、`sft_raw.jsonl`、`sft_final.jsonl`、`train.jsonl`、`val.jsonl`、`eval.jsonl`，以及阶段 9 仍需用到的 baseline/data 文件打包到 `before_stage8_*.tar.gz`
 
-#### `tsad_sft_pipeline_part3.ipynb`
+#### `part3.ipynb`
 
 - `0-C.1`：挂载 Drive、定义运行目录、安装依赖
 - `0-C.2`：恢复最新 `before_stage8_*.tar.gz`，并校验：
@@ -145,7 +148,22 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `9.1`：后台启动 merged model 的 vLLM 服务，地址 `127.0.0.1:8001`，served model name 为 `sft-model`，日志在 `/tmp/sft-vllm.log`
 - `9.2`：只在 `eval` 的 160 条样本上，对 `isolation-forest`、`qwen-local-0shot`、`sft-0shot` 做公平对比，输出 `sft_eval_metrics.csv`
 - `检查点 D`：看 SFT 是否相对 VLM zero-shot 提升至少 `0.03`；若要进入 GRPO，经验门槛是 `F1 提升 >= 0.05` 且蒸馏保留率 `>= 70%`
-- `10`：GRPO 只是占位说明，没有现成完整训练 cell；到这一步再根据检查点 D 结果补
+- `10`：（已移至 Part 4）检查点 D 后的 GRPO 占位说明，指引用户切换到 `part4.ipynb`
+
+#### `part4.ipynb`
+
+- `0-D.1`：挂载 Drive、定义运行目录（与 Part 3 相同的路径常量）、安装依赖（同 Part 3 + 确保 `trl>=0.26.2`）
+- `0-D.2`：克隆 AnomLLM 仓库；从 `DRV_SFT/part3_models_*` 恢复 SFT 合并模型到 `RT_SFT/qwen3vl-tsad-merged`；从 `DRV_PACK/part3_results_only_*.tar.gz` 恢复数据文件（`sft_manifest.csv`、`train.jsonl`、`val.jsonl`、`eval.jsonl`、baseline JSONL、`data.pkl`、`sft_eval_metrics.csv`）；校验模型目录和数据文件完整性
+- `11.1`：加载 SFT 合并模型（`RT_SFT/qwen3vl-tsad-merged`），4bit 量化，添加 LoRA（`finetune_vision_layers=False`，`finetune_language_layers=True`，`r=16`）；定义 `format_reward_func` 和 `f1_reward_func`
+- `11.2`：将 `train.jsonl` 转成 GRPO prompt 格式：每条记录包含 `prompt`（user message with image）、`image`（PIL Image）、`ground_truth`（GT intervals JSON string）；仅保留 `user` 部分，不含 `assistant`
+- `11.3a`：GRPO 冒烟训练（`max_steps=5`），验证 reward 函数返回值合理、无 OOM、无 nan
+- `11.3b`：完整 GRPO 训练
+- `检查点 E`：查看 reward 曲线趋势、生成样本质量（前 5 条 completion）；确认 mean reward 上升
+- `11.4`：导出 GRPO merged model 和 adapter
+- `12.1`：后台启动 GRPO 模型的 vLLM 服务，端口 `8002`，served model name `grpo-model`，日志 `/tmp/grpo-vllm.log`
+- `12.2`：在相同 eval 160 条上评估四种方法：`isolation-forest`、`qwen-local-0shot`、`sft-0shot`、`grpo-0shot`
+- `检查点 F`：查看 GRPO 是否相对 SFT 有提升；四种方法 F1 对比表
+- `13`：结果和模型备份到 Drive（`part4_results_only_*.tar.gz` 和 `DRV_SFT/part4_models_*`）
 
 ### SFT 清单与数据格式
 
@@ -298,9 +316,73 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - 若某条预测为 `None`，notebook 会把它视为全零向量再算指标
 - 最终 summary 是按 `method` 分组后，对 `f1` 和 `affi f1` 取平均，保存到 `/content/tsad_runtime/results/sft_eval_metrics.csv`
 
+### GRPO 训练的精确配置
+
+- 基础模型：从 `RT_SFT/qwen3vl-tsad-merged`（Part 3 导出的 SFT 合并模型）加载
+- 加载方式：
+  - `load_in_4bit=True`
+  - `use_gradient_checkpointing="unsloth"`
+- LoRA 配置：
+  - `finetune_vision_layers=False`（GRPO 阶段冻结 vision encoder）
+  - `finetune_language_layers=True`
+  - `finetune_attention_modules=True`
+  - `finetune_mlp_modules=True`
+  - `r=16`
+  - `lora_alpha=16`
+  - `lora_dropout=0.0`
+- Reward 函数（两个，加权求和）：
+  - `format_reward_func`（权重 1.0）：解析 completion 为 JSON 区间列表；格式合法（list of dict，每个含 `start`/`end`，`start < end`）得 1.0 分，否则 0.0
+  - `f1_reward_func`（权重 2.0）：解析 completion 为区间列表，调用 `interval_to_vector` + 点级 F1 计算；F1 值即为 reward（范围 0.0~1.0）；解析失败时 reward 为 0.0
+  - reward 函数签名使用 `completions` + `ground_truth` + `**kwargs`
+- 冒烟训练配置：
+  - `max_steps=5`
+  - `per_device_train_batch_size=1`
+  - `num_generations=2`
+  - `learning_rate=5e-6`
+  - `max_prompt_length=2048`
+  - `max_completion_length=256`
+  - `optim="adamw_8bit"`
+  - `report_to="none"`
+  - `loss_type="dr_grpo"`
+- 完整训练配置：
+  - `num_train_epochs=1`（GRPO 通常不需要多 epoch）
+  - `per_device_train_batch_size=1`
+  - `gradient_accumulation_steps=4`
+  - `num_generations=4`
+  - `learning_rate=5e-6`
+  - `warmup_ratio=0.1`
+  - `lr_scheduler_type="cosine"`
+  - `max_prompt_length=2048`
+  - `max_completion_length=256`
+  - `max_grad_norm=0.1`
+  - `logging_steps=1`
+  - `save_steps=50`
+  - `save_total_limit=2`
+  - `optim="adamw_8bit"`
+  - `report_to="none"`
+  - `loss_type="dr_grpo"`
+- 导出产物：
+  - merged model：`/content/tsad_runtime/sft/qwen3vl-tsad-grpo-merged`
+  - LoRA adapter：`/content/tsad_runtime/sft/qwen3vl-tsad-grpo-adapter`
+
+### GRPO 评估的固定口径
+
+- `Cell 12.1` 会把 `credentials.yml` 追加一项：
+  ```yaml
+  grpo-model:
+    api_key: dummy
+    base_url: "http://127.0.0.1:8002/v1"
+  ```
+- `Cell 12.2` 在 `eval` 的 160 条样本上评估四种方法：`isolation-forest`、`qwen-local-0shot`、`sft-0shot`、`grpo-0shot`
+- SFT 结果复用 Part 3 已有的推理输出（从 `part3_results_only_*.tar.gz` 恢复），不重新推理
+- GRPO 推理使用 `online_api.py --model grpo-model --variant 0shot-vision`
+- 评估逻辑和指标计算方式与 Part 3 Cell 9.2 完全一致（复用 `compute_metrics`、`interval_to_vector`）
+- 最终 summary 保存到 `RT_RESULTS / "grpo_eval_metrics.csv"`
+
 ### 默认操作约束
 
 - 默认不要改动 notebook 的 cell 顺序和阶段划分
 - 默认不要把 notebook 逻辑再拆成新的本地脚本，除非用户明确要求工程化
 - 默认只有 `Cell 6.1` 里的 `DASHSCOPE_API_KEY` 需要人工填写；其它参数按 notebook 默认值先跑通
 - 默认先跑冒烟，再跑全量或完整训练；不要跳过检查点
+- 默认先完成 Part 3 全部评估并通过检查点 D，再进入 Part 4 GRPO；不要跳过 SFT 阶段
