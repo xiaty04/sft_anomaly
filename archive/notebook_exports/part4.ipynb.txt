@@ -1,0 +1,1064 @@
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+# LLM Time-Series Anomaly Detection: GRPO Pipeline (Part 4)
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+本 notebook 负责恢复 Part 3 的模型与结果，完成 GRPO 训练、对比评估与最终备份。
+
+运行前提：
+- 已完成 Part 3 并通过检查点 D
+- Drive 中存在最新 `part3_results_only_*.tar.gz`
+- Drive 中存在最新 `part3_models_*`
+- 默认使用 Colab A100 GPU
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+---
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+## 阶段 0-D. 恢复环境（Part 3 模型 + 结果归档）
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 0-D.1 — 挂载 Google Drive、定义运行目录并安装依赖
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+from google.colab import drive
+drive.mount("/content/drive")
+
+from pathlib import Path
+
+RUNTIME    = Path("/content/tsad_runtime")
+DRIVE_ROOT = Path("/content/drive/MyDrive/tsad_anomaly")
+
+RT_CODE    = RUNTIME / "code"
+RT_SFT     = RUNTIME / "sft"
+RT_CKPT    = RUNTIME / "checkpoints"
+RT_RESULTS = RUNTIME / "results"
+
+DRV_PACK   = DRIVE_ROOT / "packs"
+DRV_SFT    = DRIVE_ROOT / "sft"
+DRV_CKPT   = DRIVE_ROOT / "checkpoints"
+DRV_RESULTS= DRIVE_ROOT / "results"
+
+for p in [RUNTIME, RT_CODE, RT_SFT, RT_CKPT, RT_RESULTS,
+          DRV_PACK, DRV_SFT, DRV_CKPT, DRV_RESULTS]:
+    p.mkdir(parents=True, exist_ok=True)
+
+ANOMLLM = RT_CODE / "AnomLLM"
+
+!pip install -U pip -q
+!pip install "unsloth[colab-new]" -q
+!pip install vllm openai accelerate bitsandbytes scikit-learn pandas pyyaml datasets matplotlib pillow trl==0.26.2 loguru google-generativeai requests -q
+!pip install "git+https://github.com/ahstat/affiliation-metrics-py.git" -q
+
+
+--- OUTPUT ---
+Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount("/content/drive", force_remount=True).
+[33mWARNING: unsloth 2026.4.4 does not provide the extra 'triton'[0m[33m
+[0m[31mERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+unsloth-zoo 2026.4.3 requires trl!=0.19.0,<=0.24.0,>=0.18.2, but you have trl 0.26.2 which is incompatible.
+unsloth 2026.4.4 requires trl!=0.19.0,<=0.24.0,>=0.18.2, but you have trl 0.26.2 which is incompatible.[0m[31m
+[0m  Installing build dependencies ... [?25l[?25hdone
+  Getting requirements to build wheel ... [?25l[?25hdone
+  Preparing metadata (pyproject.toml) ... [?25l[?25hdone
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 0-D.2 — 克隆仓库、恢复 Part 3 模型和结果归档并校验关键文件
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import json
+import os
+import pickle
+import shutil
+import subprocess
+import tarfile
+from pathlib import Path
+
+import pandas as pd
+import yaml
+
+SUBSETS = ["flat-trend", "range", "point", "freq"]
+
+if not ANOMLLM.exists():
+    subprocess.run([
+        "git", "clone", "https://github.com/Rose-STL-Lab/AnomLLM.git", str(ANOMLLM)
+    ], check=True)
+
+os.environ["PYTHONPATH"] = str(ANOMLLM / "src")
+
+creds_path = ANOMLLM / "credentials.yml"
+creds = yaml.safe_load(creds_path.read_text()) if creds_path.exists() else {}
+creds.setdefault("qwen-local", {"api_key": "dummy", "base_url": "http://127.0.0.1:8000/v1"})
+creds.setdefault("sft-model", {"api_key": "dummy", "base_url": "http://127.0.0.1:8001/v1"})
+creds_path.write_text(yaml.safe_dump(creds, sort_keys=False))
+print(f"已初始化 credentials: {creds_path}")
+
+model_backups = sorted(DRV_SFT.glob("part3_models_*"))
+if not model_backups:
+    raise FileNotFoundError(
+        f"未找到 {DRV_SFT}/part3_models_*。请先在 part3.ipynb 完成模型备份。"
+    )
+
+model_backup_root = model_backups[-1]
+print(f"使用模型备份: {model_backup_root}")
+
+merged_src = model_backup_root / "qwen3vl-tsad-merged"
+if not (merged_src / "config.json").exists():
+    raise FileNotFoundError(f"缺少 merged model config.json: {merged_src / 'config.json'}")
+
+merged_dst = RT_SFT / "qwen3vl-tsad-merged"
+if merged_dst.exists():
+    shutil.rmtree(merged_dst)
+shutil.copytree(merged_src, merged_dst)
+print(f"已恢复 merged model -> {merged_dst}")
+
+archives = sorted(DRV_PACK.glob("part3_results_only_*.tar.gz"))
+if not archives:
+    raise FileNotFoundError(
+        f"未找到 {DRV_PACK}/part3_results_only_*.tar.gz。请先在 part3.ipynb 完成结果备份。"
+    )
+
+archive_path = archives[-1]
+print(f"使用结果归档: {archive_path}")
+
+with tarfile.open(archive_path, "r:gz") as tar:
+    tar.extractall(RUNTIME)
+
+required_sft = [
+    RT_SFT / "sft_manifest.csv",
+    RT_SFT / "sft_final.jsonl",
+    RT_SFT / "train.jsonl",
+    RT_SFT / "val.jsonl",
+    RT_SFT / "eval.jsonl",
+]
+missing = [str(path) for path in required_sft if not path.exists() or path.stat().st_size == 0]
+if missing:
+    raise FileNotFoundError("恢复后缺少或为空的 SFT 文件:\n" + "\n".join(missing))
+
+required_results = [
+    RT_RESULTS / "baseline_compare.csv",
+    RT_RESULTS / "sft_eval_metrics.csv",
+]
+missing = [str(path) for path in required_results if not path.exists() or path.stat().st_size == 0]
+if missing:
+    raise FileNotFoundError("恢复后缺少结果文件:\n" + "\n".join(missing))
+
+manifest = pd.read_csv(RT_SFT / "sft_manifest.csv")
+split_counts = manifest["split"].value_counts().to_dict()
+expected_counts = {"train": 1280, "val": 160, "eval": 160}
+if split_counts != expected_counts:
+    raise RuntimeError(f"split 分布异常: {split_counts}, expected={expected_counts}")
+print("sft_manifest split counts:", split_counts)
+
+def normalize_legacy_messages_jsonl(path):
+    records = []
+    needs_rewrite = False
+    with open(path) as f:
+        for line in f:
+            record = json.loads(line)
+            assistant_content = record["messages"][1]["content"]
+            if isinstance(assistant_content, str):
+                record["messages"][1]["content"] = [
+                    {"type": "text", "text": assistant_content}
+                ]
+                needs_rewrite = True
+            records.append(record)
+    if needs_rewrite:
+        with open(path, "w") as f:
+            for record in records:
+                f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        print(f"已修复旧版 assistant 格式: {path.name}")
+
+for name in ["train.jsonl", "val.jsonl"]:
+    normalize_legacy_messages_jsonl(RT_SFT / name)
+
+def ensure_synthetic_figs():
+    missing_subsets = []
+    for subset in SUBSETS:
+        figs_dir = ANOMLLM / "data" / "synthetic" / subset / "eval" / "figs"
+        fig_count = len(list(figs_dir.glob("*.png"))) if figs_dir.exists() else 0
+        if fig_count < 400:
+            missing_subsets.append((subset, fig_count))
+
+    if not missing_subsets:
+        return
+
+    print("检测到训练图片缺失，按 Part 1 的数据恢复方式从 S3 补齐 AnomLLM/data")
+    print("missing fig counts:", {subset: count for subset, count in missing_subsets})
+
+    if shutil.which("s5cmd") is None:
+        subprocess.run(["pip", "install", "s5cmd", "-q"], check=True)
+
+    (ANOMLLM / "data").mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "s5cmd",
+        "--no-sign-request",
+        "--endpoint-url",
+        "https://s3-west.nrp-nautilus.io",
+        "cp",
+        "s3://anomllm/data/*",
+        "data/",
+    ], cwd=str(ANOMLLM), check=True)
+
+    remaining = []
+    for subset in SUBSETS:
+        figs_dir = ANOMLLM / "data" / "synthetic" / subset / "eval" / "figs"
+        fig_count = len(list(figs_dir.glob("*.png"))) if figs_dir.exists() else 0
+        if fig_count < 400:
+            remaining.append(f"{subset}: figs={fig_count}")
+
+    if remaining:
+        raise FileNotFoundError("从 S3 恢复数据后仍缺少训练图片:\n" + "\n".join(remaining))
+
+    print("已按 Part 1 数据恢复方式补齐训练图片")
+
+ensure_synthetic_figs()
+
+with open(RT_SFT / "train.jsonl") as f:
+    sample = json.loads(f.readline())
+user_content = sample["messages"][0]["content"]
+image_item = next(item for item in user_content if item["type"] == "image")
+assistant_content = sample["messages"][1]["content"]
+assistant_text = assistant_content[0].get("text") if isinstance(assistant_content, list) and assistant_content else None
+try:
+    assistant = json.loads(assistant_text) if assistant_text is not None else None
+except json.JSONDecodeError:
+    assistant = None
+assistant_ok = (
+    isinstance(assistant_content, list)
+    and len(assistant_content) == 1
+    and assistant_content[0].get("type") == "text"
+    and isinstance(assistant_text, str)
+    and isinstance(assistant, list)
+    and all(isinstance(iv, dict) and {"start", "end"} <= set(iv) for iv in assistant)
+)
+image_exists = Path(image_item["image"]).exists()
+print("train sample image exists:", image_exists)
+print("train sample assistant format ok:", isinstance(assistant_content, list))
+print("train sample assistant json ok:", assistant_ok)
+if not image_exists or not assistant_ok:
+    raise RuntimeError("train.jsonl 样本校验失败")
+
+print("sft_eval_metrics.csv loaded:", pd.read_csv(RT_RESULTS / "sft_eval_metrics.csv").shape)
+
+for subset in SUBSETS:
+    data_pkl = ANOMLLM / "data" / "synthetic" / subset / "eval" / "data.pkl"
+    qwen_jsonl = ANOMLLM / "results" / "synthetic" / subset / "qwen-local" / "0shot-vision.jsonl"
+    iso_jsonl = ANOMLLM / "results" / "synthetic" / subset / "isolation-forest" / "0shot.jsonl"
+    sft_jsonl = ANOMLLM / "results" / "synthetic" / subset / "sft-model" / "0shot-vision.jsonl"
+
+    required = [data_pkl, qwen_jsonl, iso_jsonl, sft_jsonl]
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        raise FileNotFoundError("恢复后缺少文件:\n" + "\n".join(missing))
+
+    with open(data_pkl, "rb") as f:
+        data = pickle.load(f)
+
+    series_count = len(data["series"])
+    qwen_lines = sum(1 for _ in open(qwen_jsonl))
+    iso_lines = sum(1 for _ in open(iso_jsonl))
+    sft_lines = sum(1 for _ in open(sft_jsonl))
+
+    print(
+        f"{subset}: series={series_count}, shape={data['series'][0].shape}, "
+        f"qwen_lines={qwen_lines}, iso_lines={iso_lines}, sft_lines={sft_lines}"
+    )
+
+    if series_count != 400:
+        raise RuntimeError(f"{subset} data.pkl 样本数异常: {series_count}, expected=400")
+    if qwen_lines != 400 or iso_lines != 400 or sft_lines != 400:
+        raise RuntimeError(
+            f"{subset} 推理结果行数异常: qwen={qwen_lines}, iso={iso_lines}, sft={sft_lines}"
+        )
+
+
+--- OUTPUT ---
+已初始化 credentials: /content/tsad_runtime/code/AnomLLM/credentials.yml
+使用模型备份: /content/drive/MyDrive/tsad_anomaly/sft/part3_models_20260405_005053
+已恢复 merged model -> /content/tsad_runtime/sft/qwen3vl-tsad-merged
+使用结果归档: /content/drive/MyDrive/tsad_anomaly/packs/part3_results_only_20260405_004901.tar.gz
+/tmp/ipykernel_7491/1149161639.py:57: DeprecationWarning: Python 3.14 will, by default, filter extracted tar archives and reject files or modify their metadata. Use the filter argument to control this behavior.
+  tar.extractall(RUNTIME)
+sft_manifest split counts: {'train': 1280, 'eval': 160, 'val': 160}
+train sample image exists: True
+train sample assistant format ok: True
+train sample assistant json ok: True
+sft_eval_metrics.csv loaded: (3, 3)
+flat-trend: series=400, shape=(1000, 1), qwen_lines=400, iso_lines=400, sft_lines=400
+range: series=400, shape=(1000, 1), qwen_lines=400, iso_lines=400, sft_lines=400
+point: series=400, shape=(1000, 1), qwen_lines=400, iso_lines=400, sft_lines=400
+freq: series=400, shape=(1000, 1), qwen_lines=400, iso_lines=400, sft_lines=400
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+---
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+## 阶段 11. GRPO 训练
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 11.1 — 加载模型并定义 reward 函数
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import json
+import os
+import sys
+
+import numpy as np
+from unsloth import FastVisionModel
+from trl import GRPOConfig, GRPOTrainer
+
+os.chdir(str(ANOMLLM))
+sys.path.insert(0, str(ANOMLLM / "src"))
+from utils import compute_metrics, interval_to_vector
+
+REWARD_WEIGHTS = [1.0, 2.0]
+
+model, tokenizer = FastVisionModel.from_pretrained(
+    model_name=str(RT_SFT / "qwen3vl-tsad-merged"),
+    load_in_4bit=True,
+    use_gradient_checkpointing="unsloth",
+)
+
+model = FastVisionModel.get_peft_model(
+    model,
+    finetune_vision_layers=False,
+    finetune_language_layers=True,
+    finetune_attention_modules=True,
+    finetune_mlp_modules=True,
+    r=16,
+    lora_alpha=16,
+    lora_dropout=0.0,
+    target_modules="all-linear",
+)
+
+def completion_to_text(completion):
+    if isinstance(completion, list):
+        if not completion:
+            return ""
+        first = completion[0]
+        if isinstance(first, dict):
+            return str(first.get("content", ""))
+        return str(first)
+    if isinstance(completion, dict):
+        return str(completion.get("content", ""))
+    return str(completion)
+
+def strip_code_fences(text):
+    text = text.strip()
+    if not text.startswith("```"):
+        return text
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text
+
+def normalize_interval_list(raw):
+    if not isinstance(raw, list):
+        return None
+    intervals = []
+    for item in raw:
+        if not isinstance(item, dict):
+            return None
+        start = item.get("start")
+        end = item.get("end")
+        if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+            return None
+        start_i = int(round(start))
+        end_i = int(round(end))
+        if start_i >= end_i:
+            return None
+        intervals.append({"start": start_i, "end": end_i})
+    return intervals
+
+def parse_interval_text(text):
+    cleaned = strip_code_fences(completion_to_text(text))
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+    return normalize_interval_list(parsed)
+
+def format_reward_func(completions, **kwargs):
+    return [1.0 if parse_interval_text(c) is not None else 0.0 for c in completions]
+
+def f1_reward_func(completions, ground_truth, **kwargs):
+    rewards = []
+    for completion, gt_text in zip(completions, ground_truth):
+        pred_intervals = parse_interval_text(completion)
+        gt_intervals = parse_interval_text(gt_text)
+        if pred_intervals is None or gt_intervals is None:
+            rewards.append(0.0)
+            continue
+        pred = interval_to_vector(pred_intervals).flatten().astype(int)
+        gt = interval_to_vector(gt_intervals).flatten().astype(int)
+        metrics = compute_metrics(gt.reshape(-1, 1), pred.reshape(-1, 1))
+        rewards.append(float(metrics["f1"]))
+    return rewards
+
+
+--- OUTPUT ---
+==((====))==  Unsloth 2026.4.4: Fast Qwen3_Vl patching. Transformers: 4.57.6. vLLM: 0.19.0.
+   \\   /|    NVIDIA A100-SXM4-40GB. Num GPUs = 1. Max memory: 39.494 GB. Platform: Linux.
+O^O/ \_/ \    Torch: 2.10.0+cu128. CUDA: 8.0. CUDA Toolkit: 12.8. Triton: 3.6.0
+\        /    Bfloat16 = TRUE. FA [Xformers = 0.0.35. FA2 = False]
+ "-____-"     Free license: http://github.com/unslothai/unsloth
+Unsloth: Fast downloading is enabled - ignore downloading bars which are red colored!
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 11.2 — 将 train.jsonl 转成 GRPO 数据格式
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import ast
+
+from datasets import Dataset
+from PIL import Image
+
+manifest = pd.read_csv(RT_SFT / "sft_manifest.csv")
+train_manifest = manifest[manifest["split"] == "train"].copy()
+if len(train_manifest) != 1280:
+    raise RuntimeError(f"train split 样本数异常: {len(train_manifest)}, expected=1280")
+
+def normalize_manifest_intervals(raw):
+    if isinstance(raw, str):
+        raw = ast.literal_eval(raw)
+    intervals = []
+    for item in raw:
+        if isinstance(item, dict):
+            start, end = item["start"], item["end"]
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            start, end = item
+        else:
+            raise ValueError(f"无法解析 intervals: {item}")
+        start_i = int(round(start))
+        end_i = int(round(end))
+        if start_i >= end_i:
+            raise ValueError(f"非法区间: start={start_i}, end={end_i}")
+        intervals.append({"start": start_i, "end": end_i})
+    return intervals
+
+gt_lookup = {}
+for _, row in train_manifest.iterrows():
+    gt_lookup[row["image_path"]] = json.dumps(
+        normalize_manifest_intervals(row["intervals"]),
+        ensure_ascii=False,
+    )
+
+train_jsonl_count = sum(1 for _ in open(RT_SFT / "train.jsonl"))
+if train_jsonl_count == 0:
+    raise RuntimeError("train.jsonl 为空，无法构造 GRPO 数据")
+
+records = []
+with open(RT_SFT / "train.jsonl") as f:
+    for line in f:
+        record = json.loads(line)
+        user_message = record["messages"][0]
+        prompt_content = []
+        image_path = None
+        for item in user_message["content"]:
+            if item["type"] == "image":
+                image_path = item["image"]
+                prompt_content.append({"type": "image"})
+            else:
+                prompt_content.append(item)
+
+        if image_path is None:
+            raise ValueError("缺少 image item")
+        if image_path not in gt_lookup:
+            raise KeyError(f"image_path 不在 GT lookup 中: {image_path}")
+
+        image = Image.open(image_path).convert("RGB")
+        records.append({
+            "prompt": [{"role": "user", "content": prompt_content}],
+            "image": image,
+            "ground_truth": gt_lookup[image_path],
+        })
+
+if len(records) != train_jsonl_count:
+    raise RuntimeError(f"GRPO 训练样本数异常: {len(records)}, expected={train_jsonl_count}")
+
+grpo_dataset = Dataset.from_list(records)
+print(grpo_dataset)
+print("train samples:", len(records))
+print("train retention vs manifest:", f"{len(records)}/{len(train_manifest)} = {len(records)/len(train_manifest):.1%}")
+print("ground_truth preview:", grpo_dataset[0]["ground_truth"])
+print("prompt preview:", grpo_dataset[0]["prompt"])
+
+
+--- OUTPUT ---
+Dataset({
+    features: ['prompt', 'image', 'ground_truth'],
+    num_rows: 1149
+})
+train samples: 1149
+train retention vs manifest: 1149/1280 = 89.8%
+ground_truth preview: []
+prompt preview: [{'content': [{'text': 'Detect ranges of anomalies in this time series, in terms of the x-axis coordinate.\nList one by one, in JSON format.\nIf there are no anomalies, answer with an empty list [].\n\nOutput template:\n[{"start": ..., "end": ...}, {"start": ..., "end": ...}...]', 'type': 'text'}, {'text': None, 'type': 'image'}], 'role': 'user'}]
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 11.3a — GRPO 冒烟训练（5 steps）
+
+用 5 步验证 reward 函数可用、无 OOM、无 nan。
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+smoke_args = GRPOConfig(
+    output_dir=str(RT_CKPT / "qwen3vl-tsad-grpo-smoke"),
+    max_steps=5,
+    per_device_train_batch_size=1,
+    num_generations=2,
+    learning_rate=5e-6,
+    max_prompt_length=2048,
+    max_completion_length=256,
+    logging_steps=1,
+    optim="adamw_8bit",
+    report_to="none",
+    loss_type="dr_grpo",
+    reward_weights=REWARD_WEIGHTS,
+)
+
+trainer = GRPOTrainer(
+    model=model,
+    processing_class=tokenizer,
+    reward_funcs=[format_reward_func, f1_reward_func],
+    args=smoke_args,
+    train_dataset=grpo_dataset,
+)
+
+smoke_result = trainer.train()
+if getattr(smoke_result, "metrics", None):
+    print(smoke_result.metrics)
+
+
+--- OUTPUT ---
+==((====))==  Unsloth - 2x faster free finetuning | Num GPUs used = 1
+   \\   /|    Num examples = 1,149 | Num Epochs = 1 | Total steps = 5
+O^O/ \_/ \    Batch size per device = 1 | Gradient accumulation steps = 2
+\        /    Data Parallel GPUs = 1 | Total batch size (1 x 2 x 1) = 2
+ "-____-"     Trainable parameters = 51,346,944 of 8,818,470,640 (0.58% trained)
+Unsloth: Will smartly offload gradients to save VRAM!
+<IPython.core.display.HTML object>{'train_runtime': 46.0803, 'train_samples_per_second': 0.217, 'train_steps_per_second': 0.109, 'total_flos': 0.0, 'train_loss': -1.3200286552716989e-08}
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 11.3b — 完整 GRPO 训练
+
+重新加载干净模型，使用短跑配置训练，并保存 log history。
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import gc
+import json
+
+import torch
+from unsloth import FastVisionModel
+from trl import GRPOConfig, GRPOTrainer
+
+if "trainer" in globals():
+    del trainer
+if "model" in globals():
+    del model
+gc.collect()
+torch.cuda.empty_cache()
+
+model, tokenizer = FastVisionModel.from_pretrained(
+    model_name=str(RT_SFT / "qwen3vl-tsad-merged"),
+    load_in_4bit=True,
+    use_gradient_checkpointing="unsloth",
+)
+
+model = FastVisionModel.get_peft_model(
+    model,
+    finetune_vision_layers=False,
+    finetune_language_layers=True,
+    finetune_attention_modules=True,
+    finetune_mlp_modules=True,
+    r=16,
+    lora_alpha=16,
+    lora_dropout=0.0,
+    target_modules="all-linear",
+)
+
+train_args = GRPOConfig(
+    output_dir=str(RT_CKPT / "qwen3vl-tsad-grpo"),
+    max_steps=200,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=4,
+    num_generations=2,
+    learning_rate=5e-6,
+    warmup_ratio=0.1,
+    lr_scheduler_type="cosine",
+    max_prompt_length=2048,
+    max_completion_length=256,
+    max_grad_norm=0.1,
+    logging_steps=1,
+    save_steps=50,
+    save_total_limit=2,
+    optim="adamw_8bit",
+    report_to="none",
+    loss_type="dr_grpo",
+    reward_weights=REWARD_WEIGHTS,
+)
+
+trainer = GRPOTrainer(
+    model=model,
+    processing_class=tokenizer,
+    reward_funcs=[format_reward_func, f1_reward_func],
+    args=train_args,
+    train_dataset=grpo_dataset,
+)
+
+train_result = trainer.train()
+if getattr(train_result, "metrics", None):
+    print(train_result.metrics)
+
+(RT_RESULTS / "grpo_train_log_history.json").write_text(
+    json.dumps(trainer.state.log_history, ensure_ascii=False, indent=2)
+)
+print(f"已写入训练日志: {RT_RESULTS / 'grpo_train_log_history.json'}")
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+---
+## ⏸ 检查点 E：GRPO 训练完成
+
+查看 reward 曲线趋势和前 5 条 completion：
+- mean reward 是否有上升趋势
+- 生成格式是否合法
+- 是否出现 OOM 或 nan
+
+当前静态验收不要求满足这些运行结果，但 notebook 保留该检查点作为 Colab 执行指引。
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 11.4 — 导出 GRPO 模型
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+model.save_pretrained_merged(RT_SFT / "qwen3vl-tsad-grpo-merged", tokenizer)
+model.save_pretrained(RT_SFT / "qwen3vl-tsad-grpo-adapter")
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+---
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+## 阶段 12. GRPO 对比评估
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 12.1 — 启动 GRPO 模型 vLLM server、更新 credentials 并跑推理
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import gc
+import os
+import subprocess
+import time
+from pathlib import Path
+
+import requests
+import torch
+import yaml
+
+model_dir = RT_SFT / "qwen3vl-tsad-grpo-merged"
+if not (model_dir / "config.json").exists():
+    raise FileNotFoundError(f"缺少 GRPO merged model config.json: {model_dir / 'config.json'}")
+weight_files = sorted(model_dir.glob("*.safetensors")) + sorted(model_dir.glob("*.bin"))
+if not weight_files:
+    raise FileNotFoundError(f"GRPO merged model 没有权重文件: {model_dir}")
+print(f"GRPO merged model ready: {len(weight_files)} weight files")
+
+for name in ["trainer", "model", "tokenizer", "train_result", "smoke_result"]:
+    if name in globals():
+        del globals()[name]
+gc.collect()
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+    free_bytes, total_bytes = torch.cuda.mem_get_info()
+    print(f"CUDA free before vLLM: {free_bytes / 1024**3:.2f} / {total_bytes / 1024**3:.2f} GB")
+time.sleep(3)
+
+os.environ["PYTHONPATH"] = str(ANOMLLM / "src")
+
+for port in [8000, 8001, 8002]:
+    subprocess.run(
+        ["pkill", "-f", f"vllm.entrypoints.openai.api_server.*--port {port}"],
+        check=False,
+    )
+time.sleep(3)
+
+log_path = Path("/tmp/grpo-vllm.log")
+with open(log_path, "w") as log_file:
+    proc = subprocess.Popen([
+        "python", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", str(RT_SFT / "qwen3vl-tsad-grpo-merged"),
+        "--served-model-name", "grpo-model",
+        "--host", "127.0.0.1",
+        "--port", "8002",
+        "--max-model-len", "8192",
+        "--gpu-memory-utilization", "0.65",
+    ], stdout=log_file, stderr=subprocess.STDOUT)
+
+print(f"已启动 vLLM pid={proc.pid}, log={log_path}")
+
+health_url = "http://127.0.0.1:8002/health"
+last_error = None
+for _ in range(60):
+    try:
+        resp = requests.get(health_url, timeout=5)
+        if resp.status_code == 200:
+            print("health check passed:", resp.status_code)
+            break
+        last_error = f"status={resp.status_code}"
+    except Exception as exc:
+        last_error = repr(exc)
+    time.sleep(5)
+else:
+    if log_path.exists():
+        print(log_path.read_text()[-6000:])
+    raise RuntimeError(f"GRPO vLLM health check 失败: {last_error}")
+
+creds_path = ANOMLLM / "credentials.yml"
+creds = yaml.safe_load(creds_path.read_text()) if creds_path.exists() else {}
+creds["grpo-model"] = {
+    "api_key": "dummy",
+    "base_url": "http://127.0.0.1:8002/v1",
+}
+creds_path.write_text(yaml.safe_dump(creds, sort_keys=False))
+print(f"已更新 credentials: {creds_path}")
+
+for subset in SUBSETS:
+    subprocess.run([
+        "python", "src/online_api.py",
+        "--data", subset,
+        "--model", "grpo-model",
+        "--variant", "0shot-vision",
+    ], cwd=str(ANOMLLM), check=True)
+
+
+--- OUTPUT ---
+GRPO merged model ready: 4 weight files
+CUDA free before vLLM: 28.78 / 39.49 GB
+已启动 vLLM pid=38917, log=/tmp/grpo-vllm.log
+health check passed: 200
+已更新 credentials: /content/tsad_runtime/code/AnomLLM/credentials.yml
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 12.2 — 在相同的 eval 160 条上计算四种方法指标
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import os
+import pickle
+import sys
+
+import numpy as np
+import pandas as pd
+
+os.chdir(str(ANOMLLM))
+sys.path.insert(0, str(ANOMLLM / "src"))
+
+from utils import compute_metrics, interval_to_vector, load_results
+
+eval_manifest = pd.read_csv(RT_SFT / "sft_manifest.csv")
+eval_manifest = eval_manifest[eval_manifest["split"] == "eval"].copy()
+if len(eval_manifest) != 160:
+    raise RuntimeError(f"eval split 样本数异常: {len(eval_manifest)}, expected=160")
+
+eval_indices = {}
+for subset, grp in eval_manifest.groupby("subset"):
+    eval_indices[subset] = grp["pkl_idx"].astype(int).tolist()
+
+gt_map = {}
+for subset in SUBSETS:
+    with open(ANOMLLM / "data" / "synthetic" / subset / "eval" / "data.pkl", "rb") as f:
+        data = pickle.load(f)
+    for idx in eval_indices.get(subset, []):
+        intervals = data["anom"][idx][0]
+        gt_map[(subset, idx)] = interval_to_vector(
+            [{"start": s, "end": e} for s, e in intervals]
+        ).flatten()
+
+def eval_metrics(method_label, result_path, eval_indices_map, gt_vectors):
+    results_raw = load_results(str(result_path), raw=False)
+    rows = []
+    for subset, idxs in eval_indices_map.items():
+        for idx in idxs:
+            pred = results_raw[idx]
+            gt = gt_vectors[(subset, idx)]
+            if pred is None:
+                pred = np.zeros_like(gt)
+            metrics = compute_metrics(gt.reshape(-1, 1), pred.reshape(-1, 1).astype(int))
+            rows.append({"method": method_label, "subset": subset, **metrics})
+    return pd.DataFrame(rows)
+
+base_dir = ANOMLLM / "results" / "synthetic"
+method_files = [
+    ("isolation-forest", "isolation-forest", "0shot.jsonl"),
+    ("qwen-local-0shot", "qwen-local", "0shot-vision.jsonl"),
+    ("sft-0shot", "sft-model", "0shot-vision.jsonl"),
+    ("grpo-0shot", "grpo-model", "0shot-vision.jsonl"),
+]
+
+all_frames = []
+for subset in SUBSETS:
+    for method_label, model_dir, filename in method_files:
+        result_path = base_dir / subset / model_dir / filename
+        all_frames.append(
+            eval_metrics(method_label, result_path, {subset: eval_indices[subset]}, gt_map)
+        )
+
+result_df = pd.concat(all_frames, ignore_index=True)
+summary = result_df.groupby("method")[["f1", "affi f1"]].mean().round(3)
+
+result_df.to_csv(RT_RESULTS / "grpo_eval_detail.csv", index=False)
+summary.to_csv(RT_RESULTS / "grpo_eval_metrics.csv")
+
+print(summary)
+print(f"已写入: {RT_RESULTS / 'grpo_eval_detail.csv'}")
+print(f"已写入: {RT_RESULTS / 'grpo_eval_metrics.csv'}")
+
+
+--- OUTPUT ---
+                     f1  affi f1
+method                          
+grpo-0shot        0.538    0.744
+isolation-forest  0.110    0.476
+qwen-local-0shot  0.440    0.629
+sft-0shot         0.552    0.755
+已写入: /content/tsad_runtime/results/grpo_eval_detail.csv
+已写入: /content/tsad_runtime/results/grpo_eval_metrics.csv
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+---
+## ⏸ 检查点 F：最终对比
+
+查看四方 summary 表：
+- `grpo-0shot` 是否至少不差于 `sft-0shot`
+- 若 F1 提升 >= 0.01，可视为有效提升
+
+当前静态验收不要求满足这些运行结果，但 notebook 保留该检查点作为 Colab 执行指引。
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+---
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+## 阶段 13. 结果与模型备份到 Drive
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 13.1 — 打包 Part 4 结果到 Drive
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import tarfile
+import time
+from pathlib import Path
+
+ts = time.strftime("%Y%m%d_%H%M%S")
+archive_path = DRV_PACK / f"part4_results_only_{ts}.tar.gz"
+archive_path.parent.mkdir(parents=True, exist_ok=True)
+
+sources = []
+seen = set()
+
+def add_file(path: Path, required=True):
+    path = Path(path)
+    if not path.exists():
+        if required:
+            raise FileNotFoundError(path)
+        return
+    if not path.is_file():
+        if required:
+            raise FileNotFoundError(f"Expected file, got: {path}")
+        return
+    key = str(path.resolve())
+    if key in seen:
+        return
+    sources.append((path, path.relative_to(RUNTIME)))
+    seen.add(key)
+
+required_result_files = [
+    RT_RESULTS / "grpo_eval_metrics.csv",
+    RT_RESULTS / "grpo_eval_detail.csv",
+    RT_RESULTS / "grpo_train_log_history.json",
+]
+missing = [str(p) for p in required_result_files if not p.exists()]
+if missing:
+    raise FileNotFoundError("缺少 Part 4 结果文件:\n" + "\n".join(missing))
+
+for p in required_result_files:
+    add_file(p)
+
+for subset in SUBSETS:
+    add_file(ANOMLLM / "results" / "synthetic" / subset / "grpo-model" / "0shot-vision.jsonl")
+
+with tarfile.open(archive_path, "w:gz") as tar:
+    for abs_path, arc_name in sources:
+        tar.add(abs_path, arcname=str(arc_name))
+
+print(f"✅ 已打包 {len(sources)} 个文件 -> {archive_path}")
+
+
+--- OUTPUT ---
+✅ 已打包 7 个文件 -> /content/drive/MyDrive/tsad_anomaly/packs/part4_results_only_20260407_073222.tar.gz
+
+
+================================================================================
+CELL TYPE: markdown
+================================================================================
+
+### Cell 13.2 — 复制 GRPO 模型目录到 Drive
+
+
+================================================================================
+CELL TYPE: code
+================================================================================
+
+import shutil
+import time
+
+model_dirs = [
+    RT_SFT / "qwen3vl-tsad-grpo-merged",
+    RT_SFT / "qwen3vl-tsad-grpo-adapter",
+]
+
+missing = [str(p) for p in model_dirs if not p.exists()]
+if missing:
+    raise FileNotFoundError("缺少 GRPO 模型目录:\n" + "\n".join(missing))
+
+ts = time.strftime("%Y%m%d_%H%M%S")
+model_backup_root = DRV_SFT / f"part4_models_{ts}"
+model_backup_root.mkdir(parents=True, exist_ok=True)
+
+for src in model_dirs:
+    dst = model_backup_root / src.name
+    if dst.exists():
+        shutil.rmtree(dst)
+    shutil.copytree(src, dst)
+
+print(f"✅ 模型已保存到: {model_backup_root}")
+for p in sorted(model_backup_root.iterdir()):
+    print(" -", p)
+
+
+--- OUTPUT ---
+✅ 模型已保存到: /content/drive/MyDrive/tsad_anomaly/sft/part4_models_20260407_073228
+ - /content/drive/MyDrive/tsad_anomaly/sft/part4_models_20260407_073228/qwen3vl-tsad-grpo-adapter
+ - /content/drive/MyDrive/tsad_anomaly/sft/part4_models_20260407_073228/qwen3vl-tsad-grpo-merged
+

@@ -1,87 +1,49 @@
-# TSAD-SFT: 时间序列异常检测的视觉 SFT 微调
+# TSAD-SFT
 
-基于 [AnomLLM](https://github.com/Rose-STL-Lab/AnomLLM) 框架，通过教师蒸馏 + SFT 微调 + GRPO 强化学习 Qwen3-VL，使其从时间序列折线图中检测异常区间。
+TSAD-SFT 是一个基于 AnomLLM 的视觉时间序列异常检测项目。当前主线固定为 `Zero-shot -> Teacher Distillation -> SFT -> GRPO`，运行环境为 Google Colab A100，Notebook 在 Colab 中执行。
 
-## 项目动机
+Part 1-4 已运行完成。后续诊断、后处理和新实验统一从 Google Drive 已保存的归档恢复数据，并在新的实验 notebook 中进行。
 
-AnomLLM 提出用 VLM 零样本识别时间序列异常，但零样本推理精度有限。本项目在其基础上加入 SFT + GRPO 两个阶段：先用强教师模型标注合成数据并微调一个轻量 VLM（SFT），再通过 F1 驱动的 GRPO 强化学习进一步优化，验证逐步训练能否持续提升检测指标。
+## 当前状态
 
-## 整体流程
+| 方法 | Point-wise F1 | Affiliation F1 |
+|------|:---:|:---:|
+| Isolation Forest | 0.110 | 0.476 |
+| Qwen3-VL zero-shot | 0.440 | 0.629 |
+| SFT | 0.552 | 0.755 |
+| GRPO | 0.538 | 0.744 |
 
-```
-合成数据（AnomLLM）
-    │
-    ▼
-VLM Baseline ──────────────────────────────────────────┐
-    │                                                  │
-    ▼                                                  │
-教师蒸馏（qwen3.5-plus 标注）                          │
-    │                                                  │
-    ▼                                                  │
-自动清洗（label 一致性 + intervals 校验）               │
-    │                                                  │
-    ▼                                                  │
-SFT 训练（Qwen3-VL + LoRA + Unsloth）                 │
-    │                                                  │
-    ▼                                                  │
-GRPO 强化学习（F1 task reward + Unsloth）              │
-    │                                                  │
-    ▼                                                  ▼
-GRPO 推理 ──────────────── 对比评估（F1 / Affi-F1）
-```
+SFT 是当前最强结果。GRPO 已完成训练与评估流程，当前 eval 指标低于 SFT。
 
-## 关键组件
-
-| 组件 | 说明 |
-|------|------|
-| **AnomLLM** | 上游框架，提供合成数据生成、VLM 推理链路、评测指标 |
-| **教师模型** | DashScope 上的 qwen3.5-plus，对折线图做异常标注 |
-| **学生模型** | Qwen3-VL-8B-Instruct，4bit 量化 + LoRA 微调 |
-| **训练框架** | Unsloth + TRL SFTTrainer |
-| **GRPO 奖励** | F1 task reward：将模型输出解析为区间，与 GT 计算点级 F1 作为奖励信号 |
-| **推理服务** | vLLM（本地 OpenAI 兼容 API） |
-
-## 数据
-
-使用 AnomLLM 提供的 4 类合成时间序列，每类 400 条评估数据：
-
-- **point** — 正弦波中的点异常（随机噪声替换）
-- **range** — 高斯噪声中的幅值偏移
-- **freq** — 正弦波中的频率突变
-- **flat-trend** — 正弦波上叠加的趋势异常
-
-每条数据包含 1000 个时间步的单变量序列及对应的异常区间标签。
-
-## 评估协议
-
-沿用 AnomLLM 的评估方式：
-1. 模型输入折线图，输出 JSON 区间列表 `[{"start": ..., "end": ...}, ...]`
-2. 区间转为 0/1 向量后，计算 point-wise F1 和 affiliation F1
-3. 在相同的 eval 子集上对比 Isolation Forest / VLM zero-shot / SFT / GRPO 四种方法
-
-## 运行环境
-
-- Google Colab，A100 GPU + 高 RAM 运行时
-- 需要 DashScope API Key（教师蒸馏阶段）
-
-## 文件结构
+## 目录
 
 ```
 .
-├── part1.ipynb                  # Part 1：环境初始化 → Baseline 评估 → 检查点 B
-├── part2.ipynb                  # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备
-├── part3.ipynb                  # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
-├── part4.ipynb                  # Part 4：恢复 Part 3 模型 → GRPO 训练 → 评估
-├── AnomLLM/                     # 上游框架（数据生成、推理、评测）
-│   └── src/
-│       ├── prompt.py            # VLM prompt 和消息构造
-│       ├── utils.py             # 输出解析、指标计算
-│       ├── online_api.py        # 在线推理入口
-│       └── data/synthetic.py    # 合成数据生成
-├── notebook_guide.md            # Notebook 各阶段详细说明
-└── archieve/                    # 历史计划文档
+├── notebooks/part1.ipynb      # Baseline 与检查点 B
+├── notebooks/part2.ipynb      # 教师蒸馏与 SFT 数据准备
+├── notebooks/part3.ipynb      # SFT 训练、导出与评估
+├── notebooks/part4.ipynb      # GRPO 训练、导出与评估
+├── notebooks/part5_drive_experiments.ipynb
+│                               # 从 Drive 恢复数据做后续诊断和实验
+├── docs/
+│   ├── notebook_guide.md      # Notebook 使用指南
+│   ├── project_report.md      # 当前项目报告与证据边界
+│   ├── optimization_plan.md   # 后续诊断与优化方案
+│   └── references/            # Unsloth / TRL 离线参考资料
+└── archive/
+    ├── code/                  # 旧 AnomLLM 本地副本归档
+    ├── figures/               # 历史图片输出
+    ├── notebook_exports/      # notebook 文本导出
+    ├── old_plans/             # 早期计划文档
+    └── papers/                # 参考论文
 ```
 
-## 文档
+## 入口文档
 
-- [Notebook 使用指南](notebook_guide.md) — 各阶段 Cell 说明、参数配置、检查点、运行步骤
+- [Notebook 使用指南](docs/notebook_guide.md)
+- [项目报告](docs/project_report.md)
+- [优化方案](docs/optimization_plan.md)
+
+## 运行约束
+
+Notebook 只在 Google Colab 中运行。教师蒸馏阶段需要 DashScope API Key。后续实验优先使用 `notebooks/part5_drive_experiments.ipynb`，从 `/content/drive/MyDrive/tsad_anomaly/packs/` 中的 `part3_results_only_*.tar.gz` 和 `part4_results_only_*.tar.gz` 恢复结果。

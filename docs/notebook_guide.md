@@ -4,10 +4,11 @@
 
 | Notebook | 内容 | 阶段 |
 |----------|------|------|
-| `part1.ipynb` | 环境初始化 → Baseline 评估 → 检查点 B | 0 – 4 |
-| `part2.ipynb` | 环境恢复（检查点 B tar 包）→ 教师蒸馏 / 训练数据准备 → `before_stage8` 打包 | 5 – 7 |
-| `part3.ipynb` | 环境恢复（阶段 7 tar 包）→ SFT 训练 / 导出 / 评估 | 8 – 10 |
-| `part4.ipynb` | 环境恢复（Part 3 模型 + 数据）→ GRPO 训练 / 评估 | 11 – 13 |
+| `notebooks/part1.ipynb` | 环境初始化 → Baseline 评估 → 检查点 B | 0 – 4 |
+| `notebooks/part2.ipynb` | 环境恢复（检查点 B tar 包）→ 教师蒸馏 / 训练数据准备 → `before_stage8` 打包 | 5 – 7 |
+| `notebooks/part3.ipynb` | 环境恢复（阶段 7 tar 包）→ SFT 训练 / 导出 / 评估 | 8 – 10 |
+| `notebooks/part4.ipynb` | 环境恢复（Part 3 模型 + 数据）→ GRPO 训练 / 评估 | 11 – 13 |
+| `notebooks/part5_drive_experiments.ipynb` | 从 Drive 保存结果恢复数据 → 诊断 / 后处理 / 新实验 | post-hoc |
 
 ---
 
@@ -22,25 +23,27 @@
 | 3 | 3.1 | 统计 Baseline（Isolation Forest） | `0shot.jsonl` |
 | 4 | 4.1 – 4.2 | 汇总 Baseline 对比 | `baseline_compare.csv` |
 | **⏸ B** | 验证 cell | **检查点：确认 Baseline 指标** | — |
-| **📓 Part 2** | — | **切换到 `part2.ipynb`** | — |
+| **📓 Part 2** | — | **切换到 `notebooks/part2.ipynb`** | — |
 | 0-B | 0-B.1 – 0-B.2 | 恢复环境（安装依赖、解压检查点 B tar 包） | 运行目录结构 |
 | 5 | 5.1 | 构建 SFT 样本清单 | `sft_manifest.csv` |
 | 6 | 6.1 – 6.2b – 6.3 | 教师蒸馏（冒烟→全量）+ 自动清洗 | `sft_final.jsonl` |
 | 7 | 7.1 – 7.3 | 转 Unsloth 训练格式 + 打包阶段 7 交接产物 | `train.jsonl` / `val.jsonl` / `eval.jsonl` / `before_stage8_*.tar.gz` |
-| **📓 Part 3** | — | **切换到 `part3.ipynb`** | — |
+| **📓 Part 3** | — | **切换到 `notebooks/part3.ipynb`** | — |
 | 0-C | 0-C.1 – 0-C.2 | 恢复环境（安装依赖、解压阶段 7 tar 包） | 运行目录结构 |
 | 8 | 8.1 – 8.2b – 8.3 | SFT 训练（冒烟→完整）+ 导出模型 | LoRA adapter + merged model |
 | **⏸ C** | 验证 cell | **检查点：确认训练完成** | — |
 | 9 | 9.1 – 9.2 | 对比 SFT 与 Baseline | `sft_eval_metrics.csv` |
 | **⏸ D** | 验证 cell | **检查点：查看 SFT 对比，决定是否进入 GRPO** | — |
 | 10 | — | 占位说明，指引切换到 Part 4 | — |
-| **📓 Part 4** | — | **切换到 `part4.ipynb`** | — |
+| **📓 Part 4** | — | **切换到 `notebooks/part4.ipynb`** | — |
 | 0-D | 0-D.1 – 0-D.2 | 恢复环境（安装依赖、恢复 SFT 模型和数据文件） | 运行目录结构 |
 | 11 | 11.1 – 11.4 | GRPO 训练（冒烟→完整）+ 导出模型 | LoRA adapter + merged model |
 | **⏸ E** | 验证 cell | **检查点：确认 GRPO 训练完成** | — |
 | 12 | 12.1 – 12.2 | 对比 GRPO / SFT / Baseline | `grpo_eval_metrics.csv` |
 | **⏸ F** | 验证 cell | **检查点：查看最终四方对比** | — |
 | 13 | 13.1 – 13.2 | 结果和模型备份到 Drive | `part4_results_only_*.tar.gz` / `part4_models_*` |
+| **📓 Part 5** | — | **切换到 `notebooks/part5_drive_experiments.ipynb`** | — |
+| post-hoc | 0.1 – 2.1 | 从 Drive 恢复 Part 3/4 保存结果，生成诊断表并继续实验 | `diagnostics_*.csv` |
 
 ---
 
@@ -94,7 +97,7 @@
 
 ---
 
-> **📓 以下阶段在 `part2.ipynb` 中运行**
+> **📓 以下阶段在 `notebooks/part2.ipynb` 中运行**
 
 ### 阶段 0-B：恢复环境（Part 2 前导）
 
@@ -128,11 +131,11 @@
 
 ### 切换到 Part 3
 
-确认 Drive 中已生成最新的 `before_stage8_*.tar.gz` 后，切换到 `part3.ipynb`。
+确认 Drive 中已生成最新的 `before_stage8_*.tar.gz` 后，切换到 `notebooks/part3.ipynb`。
 
 ---
 
-> **📓 以下阶段在 `part3.ipynb` 中运行**
+> **📓 以下阶段在 `notebooks/part3.ipynb` 中运行**
 
 ### 阶段 0-C：恢复环境（Part 3 前导）
 
@@ -169,11 +172,11 @@
 
 条件：检查点 D 通过（SFT F1 提升 >= 0.05，蒸馏保留率 >= 70%）。
 
-确认 Drive 中已生成 `part3_results_only_*.tar.gz` 和 `DRV_SFT/part3_models_*` 后，切换到 `part4.ipynb`。
+确认 Drive 中已生成 `part3_results_only_*.tar.gz` 和 `DRV_SFT/part3_models_*` 后，切换到 `notebooks/part4.ipynb`。
 
 ---
 
-> **📓 以下阶段在 `part4.ipynb` 中运行**
+> **📓 以下阶段在 `notebooks/part4.ipynb` 中运行**
 
 ### 阶段 0-D：恢复环境（Part 4 前导）
 
@@ -257,7 +260,7 @@
 
 ## 运行方法
 
-### 首次运行 — Part 1（`part1.ipynb`）
+### 首次运行 — Part 1（`notebooks/part1.ipynb`）
 
 1. 在 Colab 中打开 notebook，选择 **A100 GPU** 运行时
 2. **按顺序执行** Cell 0.1 → 0.2 → 0.3 → 1.1 → 1.2 → 1.3 → 1.4
@@ -265,18 +268,18 @@
 4. 继续执行 Cell 2.1 → 2.2 → 2.3 → 3.1 → 4.1 → 4.2
 5. 在 **检查点 B** 暂停，确认 baseline jsonl 各 400 行、F1 非零，并确认 Drive 中已生成最新的 `before_ckptB_*.tar.gz`
 
-### 首次运行 — Part 2（`part2.ipynb`）
+### 首次运行 — Part 2（`notebooks/part2.ipynb`）
 
-1. 打开 `part2.ipynb`，选择 **A100 GPU** 运行时
+1. 打开 `notebooks/part2.ipynb`，选择 **A100 GPU** 运行时
 2. 运行 Cell 0-B.1（挂载 Drive + 路径 + 依赖）和 Cell 0-B.2（克隆仓库 + 解压最新 `before_ckptB_*.tar.gz` + 校验恢复结果）
 3. 确认 4 个 `data.pkl`、`baseline_compare.csv`、各子集 baseline JSONL / agg pkl 加载正确
 4. 继续执行 Cell 5.1 → 6.1（**填入 API Key**）→ 6.2a（冒烟 20 条，确认质量 ≥ 70%）→ 6.2b（全量蒸馏）→ 6.3 → 7.1 → 7.2
 5. 运行 Cell 7.3，把阶段 5-7 产物打包到 Drive
 6. 确认 Drive 中已生成最新的 `before_stage8_*.tar.gz`
 
-### 首次运行 — Part 3（`part3.ipynb`）
+### 首次运行 — Part 3（`notebooks/part3.ipynb`）
 
-1. 打开 `part3.ipynb`，选择 **A100 GPU** 运行时
+1. 打开 `notebooks/part3.ipynb`，选择 **A100 GPU** 运行时
 2. 运行 Cell 0-C.1（挂载 Drive + 路径 + 依赖）和 Cell 0-C.2（克隆仓库 + 解压最新 `before_stage8_*.tar.gz` + 校验恢复结果）
 3. 确认 `sft_manifest.csv` 的 split 分布为 `train=1280 / val=160 / eval=160`，并且 `train.jsonl` / `val.jsonl` / `eval.jsonl` / `sft_final.jsonl` 均存在且非空
 4. 执行 Cell 8.1 → 8.2a（冒烟 5 步，确认 loss 在 1.5~4、无 OOM）
@@ -284,9 +287,9 @@
 6. 在 **检查点 C** 暂停，确认训练正常收敛，然后运行 Cell 8.3 导出
 7. 执行 Cell 9.1 → 9.2，在 **检查点 D** 查看对比结果
 
-### 首次运行 — Part 4（`part4.ipynb`）
+### 首次运行 — Part 4（`notebooks/part4.ipynb`）
 
-1. 打开 `part4.ipynb`，选择 **A100 GPU** 运行时
+1. 打开 `notebooks/part4.ipynb`，选择 **A100 GPU** 运行时
 2. 运行 Cell 0-D.1（挂载 Drive + 路径 + 依赖）和 Cell 0-D.2（克隆仓库 + 从 Drive 恢复 SFT 模型和数据文件 + 校验恢复结果）
 3. 确认 `RT_SFT/qwen3vl-tsad-merged/config.json` 存在，且 `sft_manifest.csv`、`train.jsonl`、`eval.jsonl`、baseline JSONL 均已恢复
 4. 执行 Cell 11.1 → 11.2 → 11.3a（冒烟 5 步，确认 reward 值合理、无 OOM）
@@ -295,12 +298,22 @@
 7. 执行 Cell 12.1 → 12.2，在 **检查点 F** 查看四方对比结果
 8. 运行 Cell 13.1 → 13.2 备份结果和模型到 Drive
 
+### 后续实验 — Part 5（`notebooks/part5_drive_experiments.ipynb`）
+
+1. 打开 `notebooks/part5_drive_experiments.ipynb`，选择 Colab 运行时
+2. 运行 Cell 0.1 挂载 Drive 并定义路径
+3. 运行 Cell 0.2，从 `DRV_PACK` 恢复最新 `part3_results_only_*.tar.gz` 和 `part4_results_only_*.tar.gz`
+4. 运行 Cell 0.3 检查关键文件齐全
+5. 运行 Cell 1.1 – 1.4 生成 parse、subset、interval 和 GRPO reward 诊断表
+6. 后处理、self-consistency、图像渲染或新训练实验从 Part 5 继续扩展；需要独立实验时复制 Part 5 为新的 notebook
+
 ### 断线恢复
 
 - **Part 1**：每次新 session 从 Cell 0.1 开始重跑（重新挂载 Drive、安装依赖）。数据从 S3 重新下载。
 - **Part 2**：每次新 session 运行 Cell 0-B.1 和 0-B.2 即可恢复到蒸馏前状态（依赖 + Drive 中最新的检查点 B tar 包）。
 - **Part 3**：每次新 session 运行 Cell 0-C.1 和 0-C.2 即可恢复到训练前状态（依赖 + Drive 中最新的 `before_stage8_*.tar.gz`）。
 - **Part 4**：每次新 session 运行 Cell 0-D.1 和 0-D.2 即可恢复到 GRPO 训练前状态（依赖 + Drive 中最新的 SFT 模型和 Part 3 结果 tar 包）。
+- **Part 5**：每次新 session 运行 Cell 0.1 和 0.2 即可恢复 Part 3/4 保存结果；后续实验默认使用这些 Drive 数据。
 
 ### 关键检查项
 

@@ -17,23 +17,29 @@ TSAD-SFT：基于视觉 SFT 微调的时间序列异常检测项目。该项目�
 - **不要尝试直接运行 `.ipynb`** —— Notebook 永远只在 Google Colab（A100 GPU）上运行，不要在本地环境执行
 - **不要编写过度冗余的代码** —— 保持实现简洁，避免不必要的抽象、重复逻辑和样板代码
 - **禁止复杂化与过度设计** —— 对简单问题优先采用最小可行方案；能用直接的 notebook cell、shell 命令或局部修改解决，就不要额外引入 helper、封装层、状态机或大段控制逻辑
+- **Part 1-4 已运行完成** —— 后续诊断、后处理、消融和新实验默认从 Google Drive 已保存的 `packs/` 归档恢复数据，并创建新的 notebook；不要改动 Part 1-4 的主线阶段结构
 - 运行环境：Google Colab；教师蒸馏阶段需要 DashScope API Key
 
 ## 文件结构
 
 ```
-part1.ipynb                   # Part 1：环境初始化 → Baseline 评估 → 检查点 B
-part2.ipynb                   # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
-part3.ipynb                   # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
-part4.ipynb                   # Part 4：恢复 Part 3 模型 → GRPO 训练 → 评估
-AnomLLM/src/                  # 上游框架代码
-  prompt.py                   # VLM 提示词与消息格式化
-  utils.py                    # 输出解析、F1 / Affiliation 指标
-  data/synthetic.py           # 4 类合成异常数据
-  config.py                   # 模型配置
-  online_api.py               # 在线推理与重试逻辑
-  baselines/isoforest.py      # Isolation Forest 基线
-notebook_guide.md             # 分阶段 Notebook 使用指南
+notebooks/part1.ipynb         # Part 1：环境初始化 → Baseline 评估 → 检查点 B
+notebooks/part2.ipynb         # Part 2：恢复检查点 B → 教师蒸馏 → 训练数据准备 → before_stage8 打包
+notebooks/part3.ipynb         # Part 3：恢复 before_stage8 → SFT 训练 → 导出 → 评估
+notebooks/part4.ipynb         # Part 4：恢复 Part 3 模型 → GRPO 训练 → 评估
+notebooks/part5_drive_experiments.ipynb
+                              # Part 5：从 Drive 保存归档恢复数据，做诊断、后处理和后续实验
+docs/
+  notebook_guide.md           # 分阶段 Notebook 使用指南
+  project_report.md           # 当前结果、流程与证据边界
+  optimization_plan.md        # 后续诊断与优化方案
+  references/                 # Unsloth / TRL 离线参考资料
+archive/
+  code/                       # 旧 AnomLLM 本地副本归档
+  old_plans/                  # 早期计划文档
+  notebook_exports/           # notebook 文本导出
+  figures/                    # 历史图片输出
+  papers/                     # 参考论文
 ```
 
 ## 技术栈
@@ -51,7 +57,7 @@ notebook_guide.md             # 分阶段 Notebook 使用指南
 
 ## Notebook 固定细节速查
 
-下面是当前三本 notebook 中已经写死的关键细节。后续 agent 默认以这里为准，除非用户明确要求改 notebook。
+下面是当前四本 notebook 中已经写死的关键细节。后续 agent 默认以这里为准，除非用户明确要求改 notebook。
 
 ### 运行目录与持久化路径
 
@@ -82,14 +88,15 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 
 ### Notebook 划分
 
-- `part1.ipynb`：阶段 `0-4`，并在检查点 B 后把 baseline/data 中间产物打包到 Drive 的 `before_ckptB_*.tar.gz`
-- `part2.ipynb`：阶段 `0-B`、`5-7`，并在阶段 7 末尾把蒸馏产物和后续评估所需文件打包到 Drive 的 `before_stage8_*.tar.gz`
-- `part3.ipynb`：阶段 `0-C`、`8-10`，恢复 `before_stage8_*.tar.gz` 后继续训练、导出和评估；结果保存到 `part3_results_only_*.tar.gz`，模型保存到 `DRV_SFT/part3_models_*`
-- `part4.ipynb`：阶段 `0-D`、`11-13`，从 `DRV_SFT/part3_models_*` 恢复 SFT 合并模型，从 `part3_results_only_*.tar.gz` 恢复数据文件，执行 GRPO 训练和评估
+- `notebooks/part1.ipynb`：阶段 `0-4`，并在检查点 B 后把 baseline/data 中间产物打包到 Drive 的 `before_ckptB_*.tar.gz`
+- `notebooks/part2.ipynb`：阶段 `0-B`、`5-7`，并在阶段 7 末尾把蒸馏产物和后续评估所需文件打包到 Drive 的 `before_stage8_*.tar.gz`
+- `notebooks/part3.ipynb`：阶段 `0-C`、`8-10`，恢复 `before_stage8_*.tar.gz` 后继续训练、导出和评估；结果保存到 `part3_results_only_*.tar.gz`，模型保存到 `DRV_SFT/part3_models_*`
+- `notebooks/part4.ipynb`：阶段 `0-D`、`11-13`，从 `DRV_SFT/part3_models_*` 恢复 SFT 合并模型，从 `part3_results_only_*.tar.gz` 恢复数据文件，执行 GRPO 训练和评估
+- `notebooks/part5_drive_experiments.ipynb`：Part 1-4 完成后的实验入口，从 `DRV_PACK` 恢复 `part3_results_only_*.tar.gz` 和 `part4_results_only_*.tar.gz`，生成诊断表和后处理实验结果
 
 ### Notebook 阶段与实际动作
 
-#### `part1.ipynb`
+#### `notebooks/part1.ipynb`
 
 - `0.1`：`drive.mount("/content/drive")`
 - `0.2`：创建运行目录和 Drive 持久化目录
@@ -119,7 +126,7 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `检查点 B`：`qwen-local/0shot-vision.jsonl` 和 `isolation-forest/0shot.jsonl` 都应各 400 行；Baseline F1 经验期望在 `0.2~0.7`
 - 检查点 B 后的备份 cell：把 baseline JSONL、agg PKL、`baseline_compare.csv`、4 个子集的 `eval/data.pkl` 与 `figs/` 打包到 `before_ckptB_*.tar.gz`
 
-#### `part2.ipynb`
+#### `notebooks/part2.ipynb`
 
 - `0-B.1`：挂载 Drive、定义运行目录、安装依赖
 - `0-B.2`：恢复最新 `before_ckptB_*.tar.gz`，并校验 `baseline_compare.csv`、4 个 `data.pkl`、各子集 baseline JSONL / agg PKL
@@ -132,7 +139,7 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `7.2`：把 `eval` split 单独导出成 `eval.jsonl`
 - `7.3`：把 `sft_manifest.csv`、`sft_raw_smoke.jsonl`、`sft_raw.jsonl`、`sft_final.jsonl`、`train.jsonl`、`val.jsonl`、`eval.jsonl`，以及阶段 9 仍需用到的 baseline/data 文件打包到 `before_stage8_*.tar.gz`
 
-#### `part3.ipynb`
+#### `notebooks/part3.ipynb`
 
 - `0-C.1`：挂载 Drive、定义运行目录、安装依赖
 - `0-C.2`：恢复最新 `before_stage8_*.tar.gz`，并校验：
@@ -148,9 +155,9 @@ ANOMLLM    = RT_CODE / "AnomLLM"
 - `9.1`：后台启动 merged model 的 vLLM 服务，地址 `127.0.0.1:8001`，served model name 为 `sft-model`，日志在 `/tmp/sft-vllm.log`
 - `9.2`：只在 `eval` 的 160 条样本上，对 `isolation-forest`、`qwen-local-0shot`、`sft-0shot` 做公平对比，输出 `sft_eval_metrics.csv`
 - `检查点 D`：看 SFT 是否相对 VLM zero-shot 提升至少 `0.03`；若要进入 GRPO，经验门槛是 `F1 提升 >= 0.05` 且蒸馏保留率 `>= 70%`
-- `10`：（已移至 Part 4）检查点 D 后的 GRPO 占位说明，指引用户切换到 `part4.ipynb`
+- `10`：（已移至 Part 4）检查点 D 后的 GRPO 占位说明，指引用户切换到 `notebooks/part4.ipynb`
 
-#### `part4.ipynb`
+#### `notebooks/part4.ipynb`
 
 - `0-D.1`：挂载 Drive、定义运行目录（与 Part 3 相同的路径常量）、安装依赖（同 Part 3 + 确保 `trl>=0.26.2`）
 - `0-D.2`：克隆 AnomLLM 仓库；从 `DRV_SFT/part3_models_*` 恢复 SFT 合并模型到 `RT_SFT/qwen3vl-tsad-merged`；从 `DRV_PACK/part3_results_only_*.tar.gz` 恢复数据文件（`sft_manifest.csv`、`train.jsonl`、`val.jsonl`、`eval.jsonl`、baseline JSONL、`data.pkl`、`sft_eval_metrics.csv`）；校验模型目录和数据文件完整性

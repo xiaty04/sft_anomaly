@@ -1,3 +1,8 @@
 AnomLLM/
-archieve/
 .claude/
+.DS_Store
+*.ipynb.txt
+!archive/notebook_exports/
+!archive/notebook_exports/*.ipynb.txt
+.ipynb_checkpoints/
+__pycache__/
