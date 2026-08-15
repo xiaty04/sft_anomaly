@@ -1,8 +1,25 @@
-AnomLLM/
+# Runtime / local
 .claude/
 .DS_Store
-*.ipynb.txt
-!archive/notebook_exports/
-!archive/notebook_exports/*.ipynb.txt
 .ipynb_checkpoints/
 __pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data & outputs (AutoDL data disk; do not commit large files)
+data/
+outputs/
+checkpoints/
+*.tar
+*.tar.gz
+!v1/archive/code/*.tar.gz
+
+# Notebook text dumps
+*.ipynb.txt
+!v1/archive/notebook_exports/
+!v1/archive/notebook_exports/*.ipynb.txt
+
+# Local model caches
+models/
+.cache/

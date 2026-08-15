@@ -18,6 +18,7 @@ TSAD-SFT：基于视觉 SFT 微调的时间序列异常检测项目。该项目�
 - **不要编写过度冗余的代码** —— 保持实现简洁，避免不必要的抽象、重复逻辑和样板代码
 - **禁止复杂化与过度设计** —— 对简单问题优先采用最小可行方案；能用直接的 notebook cell、shell 命令或局部修改解决，就不要额外引入 helper、封装层、状态机或大段控制逻辑
 - **Part 1-4 已运行完成** —— 后续诊断、后处理、消融和新实验默认从 Google Drive 已保存的 `packs/` 归档恢复数据，并创建新的 notebook；不要改动 Part 1-4 的主线阶段结构
+- **`docs/anomllm_v2.md` 是 v2 重做方案的规划文档（未提交、方向级）** —— 计划放弃 v1 流水线（蒸馏 + notebook + Colab），改走 AutoDL + SSH + 直接 GT 监督；只要 v2 仍是"规划中"，v1 主线与上面约束就不变
 - 运行环境：Google Colab；教师蒸馏阶段需要 DashScope API Key
 
 ## 文件结构
@@ -33,6 +34,7 @@ docs/
   notebook_guide.md           # 分阶段 Notebook 使用指南
   project_report.md           # 当前结果、流程与证据边界
   optimization_plan.md        # 后续诊断与优化方案
+  anomllm_v2.md               # v2 重做方案（规划中，未提交）：放弃蒸馏+notebook，改走 AutoDL+SSH+GT 直接监督
   references/                 # Unsloth / TRL 离线参考资料
 archive/
   code/                       # 旧 AnomLLM 本地副本归档
@@ -57,7 +59,7 @@ archive/
 
 ## Notebook 固定细节速查
 
-下面是当前四本 notebook 中已经写死的关键细节。后续 agent 默认以这里为准，除非用户明确要求改 notebook。
+下面是当前五本 notebook 中已经写死的关键细节。后续 agent 默认以这里为准，除非用户明确要求改 notebook。
 
 ### 运行目录与持久化路径
 
