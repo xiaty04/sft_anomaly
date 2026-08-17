@@ -1,208 +1,165 @@
-# 真实数据上的 LLM / VLM 时序异常检测计划
+# v2 方案：真实时序异常区间检测
 
-> **状态：草案（重构 v2，2026-07）**  
-> 目标：在真实开源数据集上验证轻量开源大模型（视觉 VLM / 文本 LLM）的时序异常检测能力；零样本 → SFT →（可选）RL 探索。  
-> 环境约束：单卡（AutoDL 或同类）+ SSH；数据集、模型、框架全部开源、轻量。
-
----
-
-## 1. 目标与验收标准
-
-**任务**：给定真实时序窗口，检测其中的异常。标签允许**单点异常**或**区间异常**，**二分类或多分类**均可；实际使用时统一转换为区间输出协议（见 D1）。
-
-**最低验收标准**
-
-| 项 | 标准 |
-|----|------|
-| 数据 | ≥2 个真实开源数据集跑通（推荐 TSB-AD 子集 + 另一个） |
-| 基线 | 同一 eval 集对比：传统基线 ≥1 + 文本 LLM + 视觉 VLM |
-| SFT | 至少完成 1 次 SFT（合成为主，可加真实数据），F1 相对零样本可复现提升或明确失败分析 |
-| 指标 | point-wise F1 + Affiliation F1（VUS-PR 可选），附 bootstrap 区间 |
-| 可复现 | 一键脚本；单卡可跑通推理 + LoRA SFT |
+> **主线**：AnomLLM 基础方法 → 本地模型 baseline → 合成数据 SFT → 区间级 RL。
+> **主要测试集**：UCR Anomaly Archive。
+> **候选测试集**：SMAP/MSL、TSB-AD-U、SMD。
+> 数据集与开源资料的详细信息见 [`v2_resources.md`](./v2_resources.md)。
 
 ---
 
-## 2. 关键决策点（待拍板）
+## 0. 核心目标与规则约束
 
-| # | 决策 | 候选 | 当前倾向 |
-|---|------|------|----------|
-| **D1** | **标签处理方案** | ① 保留点级 ② 单点异常聚合为区间 ③ 分段分类（每段正常/异常） | 视觉路线必须 ②/③；统一输出 `[{start,end}]` |
-| **D2** | **模态选择** | 文本 LLM vs 视觉 VLM | 阶段 1 头对头探针后定，不先验站队 |
-| **D3** | **训练数据** | 合成 / 真实 / 混合 | 合成优先（精确可控），真实数据可选加入 |
-| **D4** | **后训练路线** | SFT（LoRA）→ 可选 RL | 先 SFT；RL 无具体计划，仅作探索 |
+### 0.1 核心目标
 
-**D1 展开（最重要决策）**：VLM 从折线图上直接指认**单点**异常难度过高、标注噪声大。建议标签统一为**区间级**：单点异常用邻近窗口膨胀成小区间（或转分段分类），模型输出"哪些区间异常"。文本路线采用同一区间协议，保证双模态可比。二分类优先；多分类（异常类型）作为可选扩展。
+在数据集、基础模型和训练工具均开源的前提下，验证并探索大模型识别时序数据异常区间的能力，以及 SFT、RL 等后训练方法能否带来稳定、可复现的提升。实验至少需要回答：
 
-**D2 展开**：文献对"视觉 vs 文本"无一致结论。用同一批窗口做头对头对比（指标 + 吞吐 + 实现复杂度）后锁定主模态。
+1. 开源大模型在未经过本项目训练时，能否直接识别异常区间；
+2. 后训练能否提高区间定位能力、输出格式稳定性和真实数据迁移能力；
+3. 提升是否来自模型能力，而不是数据泄漏、评估协议变化或只对合成数据过拟合。
 
-**D3 展开（精确性要求）**
-- 清洗规则：结构合法 `[{start,end}]`、`start < end`、坐标在窗内；正常样本必须输出 `[]`；合成标签由生成器保证精确，真标与 GT 严格一致
-- 合成异常类型：point / range / level shift / trend / season break / freq change
+### 0.2 环境与资源约束
 
----
+- 所有正式实验必须能够在 **单张 GPU** 上完成，默认运行环境为 AutoDL 或同类云 GPU，通过 SSH 操作；
+- 数据集、基础模型、训练框架和核心依赖必须开源，并能下载到本地运行；不把闭源 API 或不可复现的在线服务作为主流程依赖；
+- 优先选择参数量较小、单卡可推理和可进行 LoRA/QLoRA 后训练的常见开源模型；显存不足时优先缩小模型、降低序列或图像规模、使用梯度累积和量化，而不是转向多卡方案；
+- 方案设计需要控制数据规模、训练时长和存储开销，先用小规模实验验证流程和方向，再扩大实验；
+- 数据下载、预处理、训练、推理和评估均应支持 SSH 环境下的命令行执行，并保存配置、日志、checkpoint 和评估结果，便于中断恢复与复现。
 
-## 3. 资源清单（已核查，2026-07）
+### 0.3 模型、框架与代码选型约束
 
-### 3.1 真实标注数据集
+- 优先使用社区常见、文档完整且仍在维护的开源模型和框架；训练主流程优先基于 Transformers、PEFT、TRL、Unsloth 等已有能力实现，避免无必要地自建训练框架；
+- 代码采用“**已有实现优先，必要时再补充**”的原则。开始新模块前，先检查 AnomLLM、所选模型官方仓库和常见开源训练框架是否已有可复用实现；
+- AnomLLM 中的数据生成、折线图渲染、提示词、区间输出、结果解析和评估等功能，应优先直接复用或进行最小化复现，并记录与原实现的对应关系和必要改动；
+- SFT、LoRA/QLoRA、RL、推理和 checkpoint 保存优先改造已有官方示例或成熟训练代码，只为本项目的输入格式、区间 reward 和评估协议增加必要逻辑；
+- 引入外部代码时记录来源、版本、许可证和本地修改，不能把来源不明或无法稳定复现的代码作为核心依赖；
+- 新增自定义实现必须说明现有代码不能满足的具体原因，并通过最小样例验证其输入、输出与统一异常区间协议一致。
 
-| 数据集 | 性质 | 标签 | 下载入口 | 核查结论 / 适配度 |
-|--------|------|------|----------|-------------------|
-| **TSB-AD-U / M** | 精筛真实+半真实 | 区间 | [U.zip](https://www.thedatum.org/datasets/TSB-AD-U.zip) / [M.zip](https://www.thedatum.org/datasets/TSB-AD-M.zip) / [repo](https://github.com/TheDatumOrg/TSB-AD) | ✓ 直链 HTTP 200 可用；NeurIPS 2024 精筛，质量最高。**主评估集**，先 U 后 M |
-| SKAB v0.9 | 工业水泵实验台，8 通道 | 点 + 集体 | [waico/SKAB](https://github.com/waico/SKAB) / [Kaggle 镜像](https://www.kaggle.com/datasets/yuriykatser/skoltech-anomaly-benchmark-skab) | ✓ 可下；体量小，适合冒烟与多类异常测试 |
-| SMAP / MSL | NASA 遥测，通道级 | 区间 | [telemanom](https://github.com/khundman/telemanom) / [HF 镜像](https://huggingface.co/datasets/appleparan/telemanom) | ✓ 可下；标签有已知争议，需抽检或只用精筛子集 |
-| NAB-real | 真实流量 / 云监控 / 广告 / Twitter | 区间（人工标） | [numenta/NAB](https://github.com/numenta/NAB)（real 类子集） | ✓ 数据在仓库内；领域多样，经典对照 |
-| HAI 23.05 | 工控安全 HIL，多变量 | 攻击区间 | [icsdataset/hai](https://github.com/icsdataset/hai) | ✓ 可下（README 内网盘链接）；需预处理，适合工业安全叙事 |
-| SMD | 服务器多变量 | 区间（有噪声） | [NetManAIOps/OmniAnomaly](https://github.com/NetManAIOps/OmniAnomaly)（多镜像） | ✓ 可下（网盘/镜像）；标签噪声需知情 |
-| AIOps 2018 KPI | 真实运维 KPI，单变量 | 区间 | [NetManAIOps/KPI-Anomaly-Detection](https://github.com/NetManAIOps/KPI-Anomaly-Detection) | ✓ 官方仓库；单变量区间标签，与任务**高度匹配** |
-
-**推荐组合**：主评估 = **TSB-AD-U 子集 + AIOps 2018 KPI（或 NAB-real）**；SKAB 用于快速冒烟。
-
-### 3.2 相关开源工作
-
-| 工作 | 对本项目的用途 | 入口 | 核查状态 |
-|------|----------------|------|----------|
-| **AnomLLM** (ICLR 2025) | 合成异常生成、prompt/输出格式、affiliation 评估 | [Rose-STL-Lab/AnomLLM](https://github.com/Rose-STL-Lab/AnomLLM) | ✓ 可用；2024-10 后停更，仅作参考 |
-| **MOMENT** | TS 基础模型（掩码预训练），做重建/表征异常分 | [repo](https://github.com/moment-timeseries-foundation-model/moment) | ✓ 活跃；权重 [AutonLab/MOMENT-1-large](https://huggingface.co/AutonLab/MOMENT-1-large) |
-| **OmniAnomaly** (KDD 2019) | 多变量无监督 DL 基线 | [NetManAIOps/OmniAnomaly](https://github.com/NetManAIOps/OmniAnomaly) | ✓ 经典基线 |
-| **Anomaly Transformer** (ICLR 2022) | 多变量 SOTA 对照 | [thuml/Anomaly-Transformer](https://github.com/thuml/Anomaly-Transformer) | ✓ |
-| **VLM-R1** | 视觉 RL（GRPO）参考，3B 权重已开源 | [om-ai-lab/VLM-R1](https://github.com/om-ai-lab/VLM-R1) | ✓ 活跃（6k+ stars）；权重 `omlab/VLM-R1-Qwen2.5VL-3B-*` |
-| **TSB-AD** (NeurIPS 2024 D&B) | 主评估协议（VUS-PR、切分方式） | [TheDatumOrg/TSB-AD](https://github.com/TheDatumOrg/TSB-AD) | ✓ 活跃 |
-
-文本路线补充参考（可选读）：[SigLLM](https://github.com/sintel-dev/sigllm)（Prompter/Detector 管线）、[LLM-TSAD](https://github.com/junwoopark92/LLM-TSAD)（index-aware prompting）。
-
-### 3.3 轻量开源模型
-
-| 模型 | 规模 | 入口 | 定位 |
-|------|------|------|------|
-| Qwen3-1.7B | 1.7B | [HF](https://huggingface.co/Qwen/Qwen3-1.7B) / ModelScope | **文本主模型** |
-| Qwen3-4B | 4B | [HF](https://huggingface.co/Qwen/Qwen3-4B) / ModelScope | 文本上限档（QLoRA 单卡可行） |
-| Qwen3-VL-2B-Instruct | 2B | [HF](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct) / ModelScope | **视觉主模型** |
-| Qwen3-VL-4B-Instruct | 4B | [HF](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) / ModelScope | 视觉上限档 |
-| MOMENT-1-large | 385M | [HF](https://huggingface.co/AutonLab/MOMENT-1-large) | 重建/预测残差对照 |
-| Chronos-Bolt-small | 9M | [HF](https://huggingface.co/amazon/chronos-bolt-small) | 轻量预测残差对照 |
-
-Qwen3 系均为 Apache-2.0；国内优先 ModelScope 镜像下载。单卡显存参考：24G 可跑 4B QLoRA SFT；OOM 先降模型规模。
-
-### 3.4 开源框架
-
-| 框架 | 用途 | 核查状态 |
-|------|------|----------|
-| Transformers / PEFT / TRL | 模型底座 + LoRA 适配 + SFT | ✓ 主流活跃 |
-| Unsloth | 单卡 SFT 加速 | ✓ 活跃 |
-| vLLM | 批量推理（OpenAI 兼容） | ✓ 活跃 |
-| TimeEval | 传统基线 + 统一评估（VLDB 2022） | ✓ 活跃，pip 可装 |
-| ~~Merlion~~ | — | ✗ **仓库已归档**（archived），从清单移除 |
+以上约束适用于后续所有阶段。若某项实验必须偏离这些规则，需要在执行前记录原因、替代方案及其对可复现性和资源需求的影响。
 
 ---
 
-## 4. 方法设计
+## 1. AnomLLM 工作简介
 
-### 4.1 任务与输出协议
-
-给定窗口 \(x_{1:T}\)，输出异常区间列表；无异常输出 `[]`：
+AnomLLM 将时间序列异常检测转成视觉理解与区间生成任务。模型读取时间序列折线图和文本提示，直接输出异常区间：
 
 ```json
 [{"start": 120, "end": 145}]
 ```
 
-- 标签统一为区间级（D1）；点级标签先膨胀为小区间
-- 二分类优先；多分类（异常类型）可选扩展
-- 解析失败记 format_error，按全零向量计分并单独报错误率
+无异常时输出 `[]`。该方法同时提供合成异常数据、图像渲染、提示词、区间解析和评估流程。
 
-### 4.2 数据协议
+v2 参考 AnomLLM 的基本任务形式，但把研究重点放在真实数据测试、重新合成 SFT 数据和区间级 RL 上。
 
+---
+
+## 2. 数据集安排
+
+### 2.1 主要测试集
+
+使用 **UCR Anomaly Archive** 作为主要测试集。UCR 中每条序列包含训练边界和异常区间，适合直接转换成统一的区间标签。
+
+UCR 只用于 baseline、SFT 模型和 RL 模型的统一测试，不参与合成数据生成和 SFT 训练。
+
+### 2.2 候选测试集
+
+- **SMAP/MSL**：NASA 多变量遥测数据；
+- **TSB-AD-U**：聚合的单变量异常检测数据；
+- **SMD**：服务器多变量监控数据。
+
+这些数据集用于后续验证方法能否迁移到不同来源以及多变量场景，不作为当前主线的前置条件。
+
+### 2.3 统一输出
+
+- 异常区间使用半开区间 `[start, end)`；
+- 单点异常表示为 `[i, i+1)`；
+- 多个异常按时间顺序输出；
+- 无异常输出 `[]`；
+- 所有方法使用相同的标签转换、解析和评估规则。
+
+---
+
+## 3. 本地模型 Baseline
+
+首先使用本地开源模型在 UCR 测试集上进行零样本异常区间检测，建立后续训练的 baseline。
+
+基本流程：
+
+```text
+UCR 原始序列
+→ 构造 AnomLLM 风格输入
+→ 本地模型推理
+→ 解析异常区间
+→ 与 UCR 真实区间比较
 ```
-原始序列 → 切窗(512–1024, stride 可配) → 标准化(z-score / robust)
-→ 双视图:  text: index-aware 序列 或 降采样+量化
-           image: 带刻度折线图(dpi/轴标签/样式固定)
-→ 标签: intervals 列表；元数据: sample_id / split / domain
+
+baseline 的作用是确认：
+
+1. 本地模型能否稳定理解输入并输出合法区间；
+2. 未经过当前项目训练时的真实异常检测能力；
+3. 后续 SFT 和 RL 是否带来实际提升。
+
+baseline 固定输入格式、提示词、推理参数和解析规则。UCR 测试结果不用于反向修改测试标签或训练数据。
+
+---
+
+## 4. 参考 AnomLLM 合成新数据集并进行 SFT
+
+参考 AnomLLM 的异常生成方式，重新生成具有精确区间标签的合成数据集。合成数据覆盖正常序列、单个异常区间和多个异常区间，并保存异常类型、位置和长度等生成信息。
+
+SFT 数据形式与 baseline 保持一致：
+
+```text
+合成时间序列或折线图 + 任务提示 → 标准异常区间 JSON
 ```
 
-### 4.3 文本路线
+合成数据划分为训练集和验证集。SFT 只使用合成训练数据，checkpoint 根据合成验证集选择，完成后再回到 UCR 测试集评估。
 
-1. 可选去趋势 / 去季节
-2. 编码：index-aware `[(0,0.12),(1,0.15),…]`（过长则 stride 采样并声明步长），或 SigLLM 式缩放量化字符串
-3. Prompt：检测异常 → 只输出 JSON 区间
-4. 零样本 → 可选同域 few-shot（1–3 例）→ SFT
+这一阶段主要比较：
 
-### 4.4 视觉路线
-
-1. 渲染**必须保留 x/y 刻度与数值范围**；固定画布、线宽、颜色，避免视觉捷径
-2. 使用区间级标签（D1），不做单点指认
-3. 长序列：滑窗；可选粗筛 + 精修两阶段（VLM4TS 思路）
-
-### 4.5 传统基线（每张结果表必有）
-
-- Isolation Forest（子序列特征）
-- Spectral Residual 或 Matrix Profile（至少一个）
-- 可选：Chronos-Bolt-small / MOMENT-1-large 预测-重建残差 + 阈值
-
-### 4.6 指标
-
-主：**point-wise F1**、**Affiliation F1**；辅：VUS-PR、precision/recall、正常样本空输出率、格式错误率；主结果附 bootstrap 95% CI。
+- SFT 前后的输出格式稳定性；
+- 合成验证集上的区间检测能力；
+- UCR 上相对 baseline 的真实数据迁移变化。
 
 ---
 
-## 5. 分阶段计划
+## 5. 区间级 RL
 
-### 阶段 0：环境打通（0.5–1 天）
+区间级 RL 从完成 SFT 的模型继续训练。模型对同一输入生成多个完整区间结果，再根据区间预测质量计算 reward。
 
-租卡（4090 24G 起步）→ SSH → 装依赖（torch / transformers / peft / trl / unsloth / vllm，按最终选型裁剪）→ ModelScope 拉模型 → 冒烟推理。
+reward 主要反映：
 
-**退出标准**：CUDA 可用；文本与视觉各完成 1 次合法 JSON 输出。
+- 输出能否被正确解析；
+- 预测区间与真实区间的重叠程度；
+- 漏检和误报；
+- 区间数量及边界偏差；
+- 无异常样本是否正确输出 `[]`。
 
-### 阶段 1：真实数据零样本探针（2–3 天）— 决策关卡
-
-**数据**：TSB-AD-U 抽 30–50 条（多领域）+ AIOps KPI / NAB-real 子集，统一切窗。
-
-| ID | 方法 | 模型 |
-|----|------|------|
-| B0 | 传统基线 | IsolationForest / SR |
-| T0 | 文本 plain | Qwen3-1.7B |
-| T1 | 文本 index-aware（±去季节） | Qwen3-1.7B |
-| V0 | 视觉零样本（有刻度，区间标签） | Qwen3-VL-2B |
-| V1 | 视觉消融（无刻度） | Qwen3-VL-2B |
-
-**退出标准**：F1 / Affi-F1 总表 → **拍板 D1 标签方案 + D2 主模态**（差距明显选胜者；接近选实现简单、吞吐高者）；记录失败模式。
-
-### 阶段 2：后训练 SFT（3–5 天）
-
-- **数据**：默认合成为主（AnomLLM 风格多类异常，每类数百窗，标签由生成器保证精确）；可选加入真实数据（与 eval 按序列 ID 严格隔离）
-- **训练**：LoRA SFT（Unsloth / TRL），1–3 epoch；先 20–50 step 冒烟（无 nan、loss 合理、能出 JSON）；导出 adapter，可选 merge
-- **评估**：同一 eval 对比 基线 / 零样本 / SFT；按 domain 切片 + bootstrap
-- **退出标准**：F1 提升 ≥ 0.03，或完整失败分析（分布偏移、过拟合合成等）
-
-### 阶段 3：扩展与 RL 探索（按需，无硬计划）
-
-1. 扩到完整 TSB-AD-U eval 列表
-2. Qwen3-4B / Qwen3-VL-4B 上限对照
-3. 同域 few-shot
-4. 多变量：通道拼图或逐通道汇总
-5. 长序列：滑窗聚合 / 粗到细
-6. **RL 探索**：参考 VLM-R1（GRPO，3B 权重已开源）；仅在 SFT 基线稳定后考虑，不作为默认训练路线
+RL 阶段沿用 SFT 的输入、输出和区间评估协议，避免同时改变任务形式。训练完成后仍在 UCR 上测试，并与本地模型 baseline 和 SFT 模型直接比较。
 
 ---
 
-## 6. 风险与缓解
+## 6. 整体实验关系
 
-| 风险 | 缓解 |
-|------|------|
-| 真实标签噪声（SMD / SMAP-MSL） | 主用 TSB-AD 精筛；人工抽检窗口 |
-| 点级标注对 VLM 太难 | D1：统一转区间级标签 |
-| 上下文超长 | stride 采样 + 显式索引；滑窗 |
-| 输出格式不稳定 | 约束解码 / 正则后处理；SFT 强化格式 |
-| 合成 → 真实负迁移 | 降低合成比例；仅真标 LoRA 对照 |
-| 视觉捷径（靠布局而非形状） | 固定样式；刻度消融实验 |
-| 单卡 OOM | 降模型 / batch=1 / grad accum / 冻结视觉塔 |
-| 下载慢 | ModelScope + 数据盘缓存 |
+```text
+AnomLLM 方法与协议
+        ↓
+UCR 上的本地模型 baseline
+        ↓
+参考 AnomLLM 生成新的合成数据集
+        ↓
+合成数据 SFT
+        ↓
+区间级 RL
+        ↓
+UCR 统一测试
+        ↓
+SMAP/MSL、TSB-AD-U、SMD 候选迁移测试
+```
 
----
+最终比较三组结果：
 
-## 7. 待办
+1. 本地模型零样本 baseline；
+2. 合成数据 SFT 模型；
+3. SFT 后进行区间级 RL 的模型。
 
-- [ ] 定 **D1 标签方案**：区间化策略（膨胀半径 / 分段粒度）
-- [ ] 定 **D2 模态**（阶段 1 探针后）
-- [ ] 定主数据集与 eval 子集（推荐 TSB-AD-U + AIOps KPI）
-- [ ] 租卡、环境冒烟
-- [ ] 零样本探针 → SFT → 评估
-- [ ] （探索）RL 方案调研（VLM-R1）
+三组实验共用 UCR 测试集、输入协议、区间输出格式和评估实现。
