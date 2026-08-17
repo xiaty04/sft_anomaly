@@ -1,0 +1,69 @@
+project:
+  seed: 3407
+  output_root: outputs
+
+model:
+  name: Qwen/Qwen2.5-VL-3B-Instruct
+  dtype: bfloat16
+  load_in_4bit: true
+  attn_implementation: sdpa
+  max_new_tokens: 192
+  temperature: 0.0
+  min_pixels: 200704
+  max_pixels: 1003520
+
+render:
+  width: 1200
+  height: 360
+  dpi: 120
+  line_width: 1.2
+
+ucr:
+  raw_dir: data/raw/ucr
+  output_dir: data/processed/ucr
+  filename_index_base: 0
+  anomaly_end_inclusive: true
+  train_end_is_count: true
+  window_size: 1000
+  stride: 500
+
+synthetic:
+  output_dir: data/processed/synthetic
+  length: 1000
+  train_samples: 1600
+  val_samples: 400
+  normal_probability: 0.20
+  max_intervals: 3
+  anomaly_types: [point, range, frequency, trend]
+
+sft:
+  output_dir: outputs/sft
+  train_manifest: data/processed/synthetic/train.jsonl
+  val_manifest: data/processed/synthetic/val.jsonl
+  num_train_epochs: 2
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 16
+  learning_rate: 0.0002
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  logging_steps: 5
+  gradient_checkpointing: true
+  lora_r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+
+rl:
+  output_dir: outputs/rl
+  train_manifest: data/processed/synthetic/train.jsonl
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.000005
+  warmup_ratio: 0.05
+  beta: 0.04
+  num_generations: 4
+  max_completion_length: 192
+  logging_steps: 5
+  save_steps: 100
+

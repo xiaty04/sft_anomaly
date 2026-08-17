@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tsad-v2"
+version = "0.1.0"
+description = "Single-GPU visual time-series anomaly interval detection pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = [
+  "matplotlib>=3.8",
+  "numpy>=1.26,<3",
+  "Pillow>=10",
+  "PyYAML>=6",
+]
+
+[project.optional-dependencies]
+train = [
+  "accelerate>=1.2",
+  "bitsandbytes>=0.43",
+  "datasets>=3.2",
+  "peft>=0.14",
+  "qwen-vl-utils>=0.0.10",
+  "torch>=2.4",
+  "transformers>=4.49",
+  "trl>=0.16",
+]
+dev = ["pytest>=8", "ruff>=0.9"]
+
+[project.scripts]
+tsad-v2 = "tsad_v2.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+ignore = ["E501", "F401"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

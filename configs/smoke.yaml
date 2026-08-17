@@ -1,0 +1,32 @@
+project:
+  seed: 3407
+  output_root: outputs/smoke
+
+ucr:
+  output_dir: data/processed/ucr_smoke
+  window_size: 512
+  stride: 256
+
+synthetic:
+  output_dir: data/processed/synthetic_smoke
+  length: 256
+  train_samples: 16
+  val_samples: 8
+  normal_probability: 0.25
+  max_intervals: 2
+
+sft:
+  output_dir: outputs/smoke/sft
+  train_manifest: data/processed/synthetic_smoke/train.jsonl
+  val_manifest: data/processed/synthetic_smoke/val.jsonl
+  max_steps: 5
+  logging_steps: 1
+  save_steps: 5
+
+rl:
+  output_dir: outputs/smoke/rl
+  train_manifest: data/processed/synthetic_smoke/train.jsonl
+  max_steps: 5
+  logging_steps: 1
+  save_steps: 5
+

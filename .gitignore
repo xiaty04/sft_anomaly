@@ -8,9 +8,9 @@ __pycache__/
 venv/
 
 # Data & outputs (AutoDL data disk; do not commit large files)
-data/
-outputs/
-checkpoints/
+/data/
+/outputs/
+/checkpoints/
 *.tar
 *.tar.gz
 !v1/archive/code/*.tar.gz
@@ -21,5 +21,13 @@ checkpoints/
 !v1/archive/notebook_exports/*.ipynb.txt
 
 # Local model caches
-models/
+/models/
 .cache/
+
+# Python packaging / tool caches
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+wandb/
