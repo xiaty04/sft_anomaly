@@ -43,6 +43,31 @@ class DataTests(unittest.TestCase):
             self.assertEqual(len(windows), 2)
             self.assertTrue(Path(windows[0]["image_path"]).exists())
 
+    def test_prepare_ucr_honors_smoke_limits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "raw"
+            raw.mkdir()
+            for archive_id in ("001", "002"):
+                source = raw / f"{archive_id}_UCR_Anomaly_demo_5_10_12.txt"
+                np.savetxt(source, np.linspace(0, 1, 30))
+            series_path, windows_path = prepare_ucr(
+                {
+                    "raw_dir": str(raw),
+                    "output_dir": str(root / "processed"),
+                    "filename_index_base": 0,
+                    "anomaly_end_inclusive": True,
+                    "train_end_is_count": True,
+                    "window_size": 10,
+                    "stride": 5,
+                    "max_series": 1,
+                    "max_windows_per_series": 1,
+                },
+                {"width": 300, "height": 120, "dpi": 60},
+            )
+            self.assertEqual(len(read_jsonl(series_path)), 1)
+            self.assertEqual(len(read_jsonl(windows_path)), 1)
+
     def test_synthetic_generation_is_reproducible(self):
         args = dict(
             length=256,
@@ -60,4 +85,3 @@ class DataTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

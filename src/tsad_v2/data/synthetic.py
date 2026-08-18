@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time as time_module
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -121,6 +122,9 @@ def generate_split(
     anomaly_types = list(config.get("anomaly_types", ["point", "range", "frequency", "trend"]))
     split_offset = 0 if split == "train" else 10_000_000
     records = []
+    started = time_module.perf_counter()
+    print(f"[generate-synthetic] generating {split} split: {count} samples", flush=True)
+    progress_step = 1 if count <= 20 else 10
     for index in range(count):
         seed = base_seed + split_offset + index
         forced_type = anomaly_types[index % len(anomaly_types)]
@@ -154,8 +158,23 @@ def generate_split(
                 "generation_parameters": parameters,
             }
         )
+        if index == 0 or (index + 1) % progress_step == 0 or index + 1 == count:
+            completed = index + 1
+            elapsed = time_module.perf_counter() - started
+            average = elapsed / completed
+            eta = average * (count - completed)
+            print(
+                f"[generate-synthetic] {split} {completed}/{count} {sample_id} "
+                f"elapsed={elapsed:.1f}s eta={eta:.1f}s",
+                flush=True,
+            )
     manifest_path = output_dir / f"{split}.jsonl"
     write_jsonl(manifest_path, records)
+    print(
+        f"[generate-synthetic] {split} done: {len(records)} records -> {manifest_path}; "
+        f"elapsed={time_module.perf_counter() - started:.1f}s",
+        flush=True,
+    )
     return manifest_path
 
 
@@ -164,4 +183,3 @@ def generate_dataset(config: Dict[str, Any], render_config: Dict[str, Any], seed
         generate_split("train", int(config["train_samples"]), config, render_config, seed),
         generate_split("val", int(config["val_samples"]), config, render_config, seed),
     ]
-

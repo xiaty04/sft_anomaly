@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
@@ -12,14 +13,21 @@ from .metrics import SampleCounts, aggregate, evaluate_sample
 
 
 def evaluate_predictions(manifest_path: Path, predictions_path: Path, output_dir: Path) -> Dict[str, Any]:
+    started = time.perf_counter()
     records = read_jsonl(manifest_path)
     predictions = read_jsonl(predictions_path)
+    print(
+        f"[evaluate] manifest={manifest_path} series={len(records)} "
+        f"predictions={len(predictions)} output={output_dir}",
+        flush=True,
+    )
     grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     for prediction in predictions:
         grouped[prediction.get("series_id", prediction["sample_id"])].append(prediction)
     rows: List[Tuple[Dict[str, Any], SampleCounts]] = []
     details = []
-    for record in records:
+    progress_step = max(1, min(25, len(records) // 10 or 1))
+    for index, record in enumerate(records, start=1):
         sample_id = record.get("series_id", record["sample_id"])
         sample_predictions = grouped.get(sample_id, [])
         combined = []
@@ -48,6 +56,8 @@ def evaluate_predictions(manifest_path: Path, predictions_path: Path, output_dir
                 **metrics,
             }
         )
+        if index == 1 or index % progress_step == 0 or index == len(records):
+            print(f"[evaluate] series {index}/{len(records)} {sample_id}", flush=True)
     summary = aggregate(rows)
     summary.update(
         {
@@ -60,6 +70,12 @@ def evaluate_predictions(manifest_path: Path, predictions_path: Path, output_dir
     write_jsonl(output_dir / "per_sample.jsonl", details)
     with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, ensure_ascii=False, indent=2)
+    print(
+        f"[evaluate] complete missing={summary['missing_samples']} "
+        f"parse_rate={summary.get('parse_rate')} point_f1={summary.get('point_f1')} "
+        f"event_f1={summary.get('event_f1')} elapsed={time.perf_counter() - started:.1f}s",
+        flush=True,
+    )
     return summary
 
 
@@ -87,4 +103,3 @@ def compare_reports(report_paths: Sequence[Path], output_path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
-

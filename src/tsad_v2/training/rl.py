@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any, Dict, Optional
 
 from ..config import save_effective_config, save_run_metadata, set_seed
@@ -27,6 +28,8 @@ def train_rl(
     resume_from_checkpoint: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> Path:
+    started = time.perf_counter()
+    print("[train-rl] loading training libraries", flush=True)
     stack = _load_rl_stack()
     torch = stack["torch"]
     seed = int(config["project"].get("seed", 3407))
@@ -38,6 +41,11 @@ def train_rl(
     if limit is not None:
         records = records[:limit]
     output_dir = Path(rl_config["output_dir"])
+    print(
+        f"[train-rl] train={len(records)} sft_adapter={sft_adapter} "
+        f"output={output_dir} resume={resume_from_checkpoint or 'none'}",
+        flush=True,
+    )
     save_effective_config(config, output_dir)
     save_run_metadata(
         {
@@ -67,9 +75,14 @@ def train_rl(
             bnb_4bit_compute_dtype=dtype,
             bnb_4bit_use_double_quant=True,
         )
+    print(f"[train-rl] loading 4-bit base model {base_name}", flush=True)
+    model_started = time.perf_counter()
     base_model = stack["AutoModelForImageTextToText"].from_pretrained(base_name, **model_kwargs)
     model = stack["PeftModel"].from_pretrained(base_model, str(sft_adapter), is_trainable=True)
     processor = stack["AutoProcessor"].from_pretrained(str(sft_adapter))
+    print(f"[train-rl] model ready after {time.perf_counter() - model_started:.1f}s", flush=True)
+    if hasattr(model, "print_trainable_parameters"):
+        model.print_trainable_parameters()
     dataset_rows = []
     for record in records:
         start = int(record.get("window_start", 0))
@@ -103,12 +116,14 @@ def train_rl(
         "num_generations": int(rl_config.get("num_generations", 4)),
         "max_completion_length": int(rl_config.get("max_completion_length", 192)),
         "logging_steps": int(rl_config.get("logging_steps", 5)),
+        "logging_first_step": True,
         "save_steps": int(rl_config.get("save_steps", 100)),
         "save_total_limit": 2,
         "bf16": model_config.get("dtype") == "bfloat16" and torch.cuda.is_bf16_supported(),
         "fp16": model_config.get("dtype") == "float16",
         "gradient_checkpointing": True,
         "report_to": "none",
+        "disable_tqdm": False,
         "seed": seed,
     }
     if "max_steps" in rl_config:
@@ -120,10 +135,13 @@ def train_rl(
         train_dataset=dataset,
         processing_class=processor,
     )
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    print("[train-rl] trainer starting; step reward, loss, and progress follow", flush=True)
+    result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    print(f"[train-rl] train metrics={result.metrics}", flush=True)
     final_dir = output_dir / "final_adapter"
+    print(f"[train-rl] saving final adapter -> {final_dir}", flush=True)
     trainer.save_model(str(final_dir))
     processor.save_pretrained(str(final_dir))
     trainer.save_state()
+    print(f"[train-rl] complete elapsed={time.perf_counter() - started:.1f}s", flush=True)
     return final_dir
-

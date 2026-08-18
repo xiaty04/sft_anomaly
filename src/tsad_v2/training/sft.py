@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 from PIL import Image
@@ -145,6 +146,8 @@ def train_sft(
     resume_from_checkpoint: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> Path:
+    started = time.perf_counter()
+    print("[train-sft] loading training libraries", flush=True)
     stack = _load_training_stack()
     torch = stack["torch"]
     seed = int(config["project"].get("seed", 3407))
@@ -159,16 +162,30 @@ def train_sft(
     if limit is not None:
         train_records, val_records = train_records[:limit], val_records[: max(1, limit // 4)]
     output_dir = Path(sft_config["output_dir"])
+    print(
+        f"[train-sft] train={len(train_records)} val={len(val_records)} "
+        f"output={output_dir} resume={resume_from_checkpoint or 'none'}",
+        flush=True,
+    )
     save_effective_config(config, output_dir)
     save_run_metadata(
         {"stage": "sft", "model": config["model"]["name"], "seed": seed}, output_dir
     )
+    print(f"[train-sft] loading processor {config['model']['name']}", flush=True)
     processor = stack["AutoProcessor"].from_pretrained(
         config["model"]["name"],
         min_pixels=int(config["model"].get("min_pixels", 200704)),
         max_pixels=int(config["model"].get("max_pixels", 1003520)),
     )
+    print(
+        f"[train-sft] loading 4-bit base model {config['model']['name']} and attaching LoRA",
+        flush=True,
+    )
+    model_started = time.perf_counter()
     model = load_sft_model(config, stack)
+    print(f"[train-sft] model ready after {time.perf_counter() - model_started:.1f}s", flush=True)
+    if hasattr(model, "print_trainable_parameters"):
+        model.print_trainable_parameters()
     use_bf16 = config["model"].get("dtype") == "bfloat16" and torch.cuda.is_bf16_supported()
     arguments: Dict[str, Any] = {
         "output_dir": str(output_dir / "checkpoints"),
@@ -180,6 +197,7 @@ def train_sft(
         "warmup_ratio": float(sft_config.get("warmup_ratio", 0.05)),
         "weight_decay": float(sft_config.get("weight_decay", 0.01)),
         "logging_steps": int(sft_config.get("logging_steps", 5)),
+        "logging_first_step": True,
         "eval_strategy": "epoch",
         "save_strategy": "epoch",
         "load_best_model_at_end": True,
@@ -191,6 +209,7 @@ def train_sft(
         "gradient_checkpointing": bool(sft_config.get("gradient_checkpointing", True)),
         "remove_unused_columns": False,
         "report_to": "none",
+        "disable_tqdm": False,
         "seed": seed,
     }
     if "max_steps" in sft_config:
@@ -207,10 +226,13 @@ def train_sft(
         eval_dataset=ManifestDataset(val_records),
         data_collator=VisionSFTCollator(processor),
     )
-    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    print("[train-sft] trainer starting; step loss and progress follow", flush=True)
+    result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    print(f"[train-sft] train metrics={result.metrics}", flush=True)
     final_dir = output_dir / "final_adapter"
+    print(f"[train-sft] saving final adapter -> {final_dir}", flush=True)
     trainer.save_model(str(final_dir))
     processor.save_pretrained(str(final_dir))
     trainer.save_state()
+    print(f"[train-sft] complete elapsed={time.perf_counter() - started:.1f}s", flush=True)
     return final_dir
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -59,14 +60,27 @@ def _convert_metadata(metadata: Dict[str, Any], config: Dict[str, Any], length: 
 
 
 def prepare_ucr(config: Dict[str, Any], render_config: Dict[str, Any]) -> Tuple[Path, Path]:
+    started = time.perf_counter()
     raw_dir = Path(config["raw_dir"])
     output_dir = Path(config["output_dir"])
     files = sorted(raw_dir.glob("*.txt"))
     if not files:
         raise FileNotFoundError(f"no UCR .txt files found in {raw_dir}")
+    available = len(files)
+    max_series = config.get("max_series")
+    if max_series is not None:
+        files = files[: int(max_series)]
     image_dir = output_dir / "images"
+    total = len(files)
+    print(
+        f"[prepare-ucr] selected {total}/{available} UCR files from {raw_dir}; "
+        f"output={output_dir}",
+        flush=True,
+    )
     series_records, window_records = [], []
-    for path in files:
+    for index, path in enumerate(files, start=1):
+        series_started = time.perf_counter()
+        print(f"[prepare-ucr] series {index}/{total} loading {path.name}", flush=True)
         metadata = parse_ucr_filename(path)
         values = _load_series(path)
         test_start, intervals = _convert_metadata(metadata, config, len(values))
@@ -92,10 +106,26 @@ def prepare_ucr(config: Dict[str, Any], render_config: Dict[str, Any]) -> Tuple[
             int(config.get("window_size", 1000)),
             int(config.get("stride", 500)),
         )
+        max_windows = config.get("max_windows_per_series")
+        if max_windows is not None:
+            starts = starts[: int(max_windows)]
+        window_total = len(starts)
+        progress_step = max(1, min(25, window_total // 10 or 1))
+        rendered = 0
+        reused = 0
+        print(
+            f"[prepare-ucr] series {index}/{total} length={len(values)} "
+            f"eval=[{test_start},{len(values)}) windows={window_total}",
+            flush=True,
+        )
         for window_index, window_start in enumerate(starts):
             window_end = min(window_start + int(config.get("window_size", 1000)), len(values))
             image_path = image_dir / f"{series_id}_{window_index:04d}.png"
-            render_series(values[window_start:window_end], image_path, window_start, render_config)
+            if bool(config.get("reuse_images", True)) and image_path.exists():
+                reused += 1
+            else:
+                render_series(values[window_start:window_end], image_path, window_start, render_config)
+                rendered += 1
             window_records.append(
                 {
                     "sample_id": f"{series_id}_w{window_index:04d}",
@@ -109,9 +139,26 @@ def prepare_ucr(config: Dict[str, Any], render_config: Dict[str, Any]) -> Tuple[
                     "intervals": to_jsonable(clip(intervals, window_start, window_end)),
                 }
             )
+            completed = window_index + 1
+            if completed == 1 or completed % progress_step == 0 or completed == window_total:
+                elapsed = time.perf_counter() - series_started
+                print(
+                    f"[prepare-ucr] series {index}/{total} windows "
+                    f"{completed}/{window_total} rendered={rendered} reused={reused} "
+                    f"elapsed={elapsed:.1f}s",
+                    flush=True,
+                )
+        print(
+            f"[prepare-ucr] series {index}/{total} done in "
+            f"{time.perf_counter() - series_started:.1f}s",
+            flush=True,
+        )
     series_path = output_dir / "series.jsonl"
     windows_path = output_dir / "windows.jsonl"
     write_jsonl(series_path, series_records)
     write_jsonl(windows_path, window_records)
+    print(f"[prepare-ucr] wrote {len(series_records)} series -> {series_path}", flush=True)
+    print(f"[prepare-ucr] wrote {len(window_records)} windows -> {windows_path}", flush=True)
+    print(f"[prepare-ucr] wrote {len(window_records)} images -> {image_dir}", flush=True)
+    print(f"[prepare-ucr] total elapsed={time.perf_counter() - started:.1f}s", flush=True)
     return series_path, windows_path
-

@@ -70,7 +70,8 @@ def _load_model(model_name: str, adapter_path: Optional[str], model_config: Dict
 def _generate(model: Any, processor: Any, torch: Any, record: Dict[str, Any], config: Dict[str, Any]) -> str:
     start = int(record.get("window_start", 0))
     end = int(record.get("window_end", record["length"]))
-    image = Image.open(record["image_path"]).convert("RGB")
+    with Image.open(record["image_path"]) as source:
+        image = source.convert("RGB").copy()
     messages = [
         {
             "role": "user",
@@ -114,6 +115,7 @@ def run_inference(
     completed = set()
     if output_path.exists():
         completed = {record["sample_id"] for record in read_jsonl(output_path)}
+    pending = [record for record in records if record["sample_id"] not in completed]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     save_effective_config(config, output_path.parent)
     save_run_metadata(
@@ -126,14 +128,33 @@ def run_inference(
         },
         output_path.parent,
     )
+    print(
+        f"[infer] manifest={manifest_path} selected={len(records)} "
+        f"completed={len(records) - len(pending)} pending={len(pending)} output={output_path}",
+        flush=True,
+    )
+    if not pending:
+        print("[infer] all selected records are already complete; model loading skipped", flush=True)
+        return
+    load_started = time.perf_counter()
+    print(
+        f"[infer] loading model={model_name} adapter={adapter_path or 'none'} "
+        f"dtype={model_config.get('dtype', 'bfloat16')} 4bit={model_config.get('load_in_4bit', True)}",
+        flush=True,
+    )
     model, processor, torch = _load_model(model_name, adapter_path, model_config)
-    for record in records:
-        if record["sample_id"] in completed:
-            continue
-        started = time.perf_counter()
-        output = _generate(model, processor, torch, record, model_config)
+    print(
+        f"[infer] model ready after {time.perf_counter() - load_started:.1f}s; "
+        f"processing {len(pending)} record(s)",
+        flush=True,
+    )
+    run_started = time.perf_counter()
+    for processed, record in enumerate(pending, start=1):
         start = int(record.get("window_start", 0))
         end = int(record.get("window_end", record["length"]))
+        print(f"[infer] {processed}/{len(pending)} {record['sample_id']} ...", flush=True)
+        started = time.perf_counter()
+        output = _generate(model, processor, torch, record, model_config)
         parsed = parse_interval_output(output, lower=start, upper=end)
         append_jsonl(
             output_path,
@@ -150,4 +171,17 @@ def run_inference(
                 "model": model_name,
             },
         )
-
+        elapsed = time.perf_counter() - run_started
+        average = elapsed / processed
+        eta = average * (len(pending) - processed)
+        print(
+            f"[infer] wrote {record['sample_id']} parse_valid={parsed.valid} "
+            f"latency={time.perf_counter() - started:.2f}s "
+            f"average={average:.2f}s eta={eta:.1f}s",
+            flush=True,
+        )
+    print(
+        f"[infer] done: {len(pending)} new prediction(s) appended to {output_path}; "
+        f"elapsed={time.perf_counter() - run_started:.1f}s",
+        flush=True,
+    )
