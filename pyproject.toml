@@ -6,9 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tsad-v2"
 version = "0.1.0"
 description = "Single-GPU visual time-series anomaly interval detection pipeline"
-readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
 dependencies = [
   "matplotlib>=3.8",
   "numpy>=1.26,<3",
@@ -45,4 +43,3 @@ ignore = ["E501", "F401"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
