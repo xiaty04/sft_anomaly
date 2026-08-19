@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import time as time_module
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from ..intervals import Interval, to_jsonable
 from ..io import write_jsonl
 from ..rendering import render_series
+from .common import load_series
+from .ucr import parse_ucr_filename
 
 
 def _background(length: int, rng: np.random.Generator) -> np.ndarray:
@@ -81,9 +83,15 @@ def generate_sample(
     max_intervals: int,
     seed: int,
     forced_type: str,
+    background: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, List[Interval], List[str], List[Dict[str, float]]]:
     rng = np.random.default_rng(seed)
-    series = _background(length, rng)
+    if background is None:
+        series = _background(length, rng)
+    else:
+        series = np.asarray(background, dtype=np.float32).reshape(-1).copy()
+        if len(series) != length or not np.isfinite(series).all():
+            raise ValueError("background must be finite and match the requested length")
     if rng.random() < normal_probability:
         return series, [], [], []
     count = int(rng.integers(1, max_intervals + 1))
@@ -112,6 +120,7 @@ def generate_split(
     config: Dict[str, Any],
     render_config: Dict[str, Any],
     base_seed: int,
+    backgrounds: Sequence[Tuple[str, np.ndarray]],
 ) -> Path:
     if split not in {"train", "val"}:
         raise ValueError("synthetic split must be train or val")
@@ -127,14 +136,34 @@ def generate_split(
     progress_step = 1 if count <= 20 else 10
     for index in range(count):
         seed = base_seed + split_offset + index
+        background_id, source_values = backgrounds[index % len(backgrounds)]
+        background_rng = np.random.default_rng(seed + 50_000_000)
+        target_length = int(config.get("length", 1000))
+        if len(source_values) >= target_length:
+            maximum_start = len(source_values) - target_length
+            source_start = int(background_rng.integers(0, maximum_start + 1))
+            background = source_values[source_start : source_start + target_length].copy()
+        else:
+            source_start = 0
+            old_axis = np.linspace(0.0, 1.0, len(source_values))
+            new_axis = np.linspace(0.0, 1.0, target_length)
+            background = np.interp(new_axis, old_axis, source_values)
+        median = float(np.median(background))
+        scale = float(np.median(np.abs(background - median)))
+        if scale < 1e-6:
+            scale = max(float(np.std(background)), 1.0)
+        background = ((background - median) / scale).astype(np.float32)
+        background *= float(background_rng.uniform(0.8, 1.2))
+        background += background_rng.normal(0.0, 0.01, target_length).astype(np.float32)
         forced_type = anomaly_types[index % len(anomaly_types)]
         series, intervals, used_types, parameters = generate_sample(
-            length=int(config.get("length", 1000)),
+            length=target_length,
             anomaly_types=anomaly_types,
             normal_probability=float(config.get("normal_probability", 0.2)),
             max_intervals=int(config.get("max_intervals", 3)),
             seed=seed,
             forced_type=forced_type,
+            background=background,
         )
         sample_id = f"syn_{split}_{index:05d}"
         series_path = series_dir / f"{sample_id}.npy"
@@ -155,6 +184,9 @@ def generate_split(
                 "intervals": to_jsonable(intervals),
                 "anomaly_types": used_types,
                 "generation_seed": seed,
+                "background_source": "ucr_normal_prefix",
+                "background_series_id": background_id,
+                "background_start": source_start,
                 "generation_parameters": parameters,
             }
         )
@@ -178,8 +210,52 @@ def generate_split(
     return manifest_path
 
 
-def generate_dataset(config: Dict[str, Any], render_config: Dict[str, Any], seed: int) -> List[Path]:
+def _ucr_backgrounds(ucr_config: Dict[str, Any]) -> List[Tuple[str, np.ndarray]]:
+    raw_dir = Path(ucr_config["raw_dir"])
+    files = sorted(raw_dir.glob("*.txt"))
+    max_series = ucr_config.get("max_series")
+    if max_series is not None:
+        files = files[: int(max_series)]
+    backgrounds: List[Tuple[str, np.ndarray]] = []
+    index_base = int(ucr_config.get("filename_index_base", 0))
+    for path in files:
+        metadata = parse_ucr_filename(path)
+        values = load_series(path)
+        if bool(ucr_config.get("train_end_is_count", True)):
+            train_end = int(metadata["train_end_raw"])
+        else:
+            train_end = int(metadata["train_end_raw"]) - index_base + 1
+        if not (8 <= train_end <= len(values)):
+            raise ValueError(f"invalid UCR normal prefix for {path.name}: {train_end}")
+        backgrounds.append((f"ucr_{metadata['archive_id']}", values[:train_end]))
+    if len(backgrounds) < 2:
+        raise ValueError("at least two UCR normal prefixes are required for train/val synthesis")
+    return backgrounds
+
+
+def split_backgrounds(
+    backgrounds: Sequence[Tuple[str, np.ndarray]], seed: int
+) -> Tuple[List[Tuple[str, np.ndarray]], List[Tuple[str, np.ndarray]]]:
+    if len(backgrounds) < 2:
+        raise ValueError("at least two backgrounds are required")
+    order = np.random.default_rng(seed).permutation(len(backgrounds))
+    shuffled = [backgrounds[int(index)] for index in order]
+    split_index = max(1, min(len(shuffled) - 1, int(round(len(shuffled) * 0.8))))
+    return shuffled[:split_index], shuffled[split_index:]
+
+
+def generate_dataset(
+    config: Dict[str, Any], render_config: Dict[str, Any], seed: int, ucr_config: Dict[str, Any]
+) -> List[Path]:
+    if config.get("background_source") != "ucr_normal_prefix":
+        raise ValueError("synthetic.background_source must be ucr_normal_prefix")
+    backgrounds = _ucr_backgrounds(ucr_config)
+    train_backgrounds, val_backgrounds = split_backgrounds(backgrounds, seed)
     return [
-        generate_split("train", int(config["train_samples"]), config, render_config, seed),
-        generate_split("val", int(config["val_samples"]), config, render_config, seed),
+        generate_split(
+            "train", int(config["train_samples"]), config, render_config, seed, train_backgrounds
+        ),
+        generate_split(
+            "val", int(config["val_samples"]), config, render_config, seed, val_backgrounds
+        ),
     ]

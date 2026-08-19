@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from tsad_v2.data.synthetic import generate_sample
+from tsad_v2.data.synthetic import generate_sample, split_backgrounds
 from tsad_v2.data.ucr import parse_ucr_filename, prepare_ucr
 from tsad_v2.io import read_jsonl
 
@@ -42,6 +42,7 @@ class DataTests(unittest.TestCase):
             self.assertEqual(series[0]["intervals"], [{"start": 10, "end": 13}])
             self.assertEqual(len(windows), 2)
             self.assertTrue(Path(windows[0]["image_path"]).exists())
+            self.assertEqual(Path(windows[0]["series_path"]), source.resolve())
 
     def test_prepare_ucr_honors_smoke_limits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -81,6 +82,14 @@ class DataTests(unittest.TestCase):
         second = generate_sample(**args)
         np.testing.assert_array_equal(first[0], second[0])
         self.assertEqual(first[1:], second[1:])
+
+    def test_synthetic_background_entities_are_split(self):
+        backgrounds = [(f"ucr_{index:03d}", np.arange(8)) for index in range(10)]
+        train, val = split_backgrounds(backgrounds, seed=3407)
+        train_ids = {item[0] for item in train}
+        val_ids = {item[0] for item in val}
+        self.assertFalse(train_ids & val_ids)
+        self.assertEqual(len(train) + len(val), len(backgrounds))
 
 
 if __name__ == "__main__":

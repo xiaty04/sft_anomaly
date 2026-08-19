@@ -18,16 +18,9 @@ synthetic:
   max_intervals: 2
 
 sft:
-  output_dir: outputs/smoke/sft
+  output_root: outputs/smoke/sft
   train_manifest: data/processed/synthetic_smoke/train.jsonl
   val_manifest: data/processed/synthetic_smoke/val.jsonl
-  max_steps: 5
-  logging_steps: 1
-  save_steps: 5
-
-rl:
-  output_dir: outputs/smoke/rl
-  train_manifest: data/processed/synthetic_smoke/train.jsonl
   max_steps: 5
   logging_steps: 1
   save_steps: 5

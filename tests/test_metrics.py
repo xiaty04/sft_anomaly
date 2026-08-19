@@ -1,7 +1,6 @@
 import unittest
 
 from tsad_v2.metrics import aggregate, evaluate_sample
-from tsad_v2.rewards import interval_quality_reward
 
 
 class MetricsTests(unittest.TestCase):
@@ -21,16 +20,6 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["point_f1"], 1.0)
         self.assertEqual(summary["normal_accuracy"], 1.0)
 
-    def test_reward_prefers_exact_prediction(self):
-        truth = [{"start": 2, "end": 5}]
-        exact = interval_quality_reward('[{"start":2,"end":5}]', truth, 0, 10)
-        missed = interval_quality_reward("[]", truth, 0, 10)
-        invalid = interval_quality_reward("not json", truth, 0, 10)
-        self.assertGreater(exact, missed)
-        self.assertGreater(missed, invalid)
-        self.assertLessEqual(exact, 1.0)
-
 
 if __name__ == "__main__":
     unittest.main()
-

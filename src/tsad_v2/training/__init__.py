@@ -1,2 +1,1 @@
-"""Single-GPU SFT and interval-level RL entry points."""
-
+"""Single-GPU paired text and vision SFT entry points."""

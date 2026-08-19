@@ -27,6 +27,13 @@ ucr:
   window_size: 1000
   stride: 500
 
+isolation_forest:
+  n_estimators: 200
+  feature_windows: [5, 21, 51]
+  train_score_quantile: 0.995
+  min_event_length: 1
+  n_jobs: -1
+
 synthetic:
   output_dir: data/processed/synthetic
   length: 1000
@@ -35,9 +42,10 @@ synthetic:
   normal_probability: 0.20
   max_intervals: 3
   anomaly_types: [point, range, frequency, trend]
+  background_source: ucr_normal_prefix
 
 sft:
-  output_dir: outputs/sft
+  output_root: outputs/sft
   train_manifest: data/processed/synthetic/train.jsonl
   val_manifest: data/processed/synthetic/val.jsonl
   num_train_epochs: 2
@@ -52,18 +60,3 @@ sft:
   lora_r: 16
   lora_alpha: 32
   lora_dropout: 0.05
-
-rl:
-  output_dir: outputs/rl
-  train_manifest: data/processed/synthetic/train.jsonl
-  num_train_epochs: 1
-  per_device_train_batch_size: 1
-  gradient_accumulation_steps: 8
-  learning_rate: 0.000005
-  warmup_ratio: 0.05
-  beta: 0.04
-  num_generations: 4
-  max_completion_length: 192
-  logging_steps: 5
-  save_steps: 100
-

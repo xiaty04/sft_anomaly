@@ -5,12 +5,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import numpy as np
-
 from ..intervals import clip, to_jsonable
 from ..io import write_jsonl
 from ..rendering import render_series
-from .common import window_starts
+from .common import load_series, window_starts
 
 UCR_PATTERN = re.compile(
     r"^(?P<id>\d+)_UCR_Anomaly_(?P<name>.+)_(?P<train>\d+)_(?P<start>\d+)_(?P<end>\d+)\.txt$"
@@ -29,17 +27,6 @@ def parse_ucr_filename(path: Path) -> Dict[str, Any]:
         "anomaly_start_raw": int(values["start"]),
         "anomaly_end_raw": int(values["end"]),
     }
-
-
-def _load_series(path: Path) -> np.ndarray:
-    try:
-        values = np.loadtxt(path, dtype=np.float64)
-    except ValueError:
-        values = np.loadtxt(path, dtype=np.float64, delimiter=",")
-    values = np.asarray(values, dtype=np.float64).reshape(-1)
-    if not len(values) or not np.isfinite(values).all():
-        raise ValueError(f"UCR series is empty or non-finite: {path}")
-    return values
 
 
 def _convert_metadata(metadata: Dict[str, Any], config: Dict[str, Any], length: int) -> Tuple[int, List[Tuple[int, int]]]:
@@ -82,7 +69,7 @@ def prepare_ucr(config: Dict[str, Any], render_config: Dict[str, Any]) -> Tuple[
         series_started = time.perf_counter()
         print(f"[prepare-ucr] series {index}/{total} loading {path.name}", flush=True)
         metadata = parse_ucr_filename(path)
-        values = _load_series(path)
+        values = load_series(path)
         test_start, intervals = _convert_metadata(metadata, config, len(values))
         series_id = f"ucr_{metadata['archive_id']}"
         series_records.append(
@@ -132,6 +119,7 @@ def prepare_ucr(config: Dict[str, Any], render_config: Dict[str, Any]) -> Tuple[
                     "series_id": series_id,
                     "source": "ucr",
                     "split": "test",
+                    "series_path": str(path.resolve()),
                     "image_path": str(image_path.resolve()),
                     "window_start": window_start,
                     "window_end": window_end,

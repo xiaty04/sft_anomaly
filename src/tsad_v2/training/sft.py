@@ -9,6 +9,7 @@ from PIL import Image
 from ..config import save_effective_config, save_run_metadata, set_seed
 from ..data.common import load_training_manifest
 from ..intervals import canonicalize, to_json
+from ..modalities import text_prompt, validate_modality
 from ..prompts import interval_prompt
 
 
@@ -87,24 +88,31 @@ class ManifestDataset:
         return self.records[index]
 
 
-class VisionSFTCollator:
-    def __init__(self, processor: Any):
+class SFTCollator:
+    def __init__(self, processor: Any, modality: str):
         self.processor = processor
+        self.modality = validate_modality(modality)
         if self.processor.tokenizer.pad_token_id is None:
             self.processor.tokenizer.pad_token_id = self.processor.tokenizer.eos_token_id
         self.processor.tokenizer.padding_side = "right"
 
     @staticmethod
-    def _messages(record: Dict[str, Any], image: Image.Image, include_answer: bool) -> List[Dict[str, Any]]:
+    def _messages(
+        record: Dict[str, Any], image: Optional[Image.Image], include_answer: bool
+    ) -> List[Dict[str, Any]]:
         start = int(record.get("window_start", 0))
         end = int(record.get("window_end", record["length"]))
+        if image is None:
+            content = [{"type": "text", "text": text_prompt(record)}]
+        else:
+            content = [
+                {"type": "image", "image": image},
+                {"type": "text", "text": interval_prompt(start, end)},
+            ]
         messages = [
             {
                 "role": "user",
-                "content": [
-                    {"type": "image", "image": image},
-                    {"type": "text", "text": interval_prompt(start, end)},
-                ],
+                "content": content,
             }
         ]
         if include_answer:
@@ -115,9 +123,11 @@ class VisionSFTCollator:
     def __call__(self, records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         images, full_texts, prompt_texts = [], [], []
         for record in records:
-            with Image.open(record["image_path"]) as source:
-                image = source.convert("RGB").copy()
-            images.append(image)
+            image = None
+            if self.modality == "vision":
+                with Image.open(record["image_path"]) as source:
+                    image = source.convert("RGB").copy()
+                images.append(image)
             full_texts.append(
                 self.processor.apply_chat_template(
                     self._messages(record, image, True), tokenize=False, add_generation_prompt=False
@@ -128,10 +138,21 @@ class VisionSFTCollator:
                     self._messages(record, image, False), tokenize=False, add_generation_prompt=True
                 )
             )
-        batch = self.processor(text=full_texts, images=images, padding=True, return_tensors="pt")
-        prompt_batch = self.processor(
-            text=prompt_texts, images=images, padding=True, return_tensors="pt"
-        )
+        processor_kwargs: Dict[str, Any] = {
+            "text": full_texts,
+            "padding": True,
+            "return_tensors": "pt",
+        }
+        prompt_kwargs: Dict[str, Any] = {
+            "text": prompt_texts,
+            "padding": True,
+            "return_tensors": "pt",
+        }
+        if self.modality == "vision":
+            processor_kwargs["images"] = images
+            prompt_kwargs["images"] = images
+        batch = self.processor(**processor_kwargs)
+        prompt_batch = self.processor(**prompt_kwargs)
         labels = batch["input_ids"].clone()
         labels[batch["attention_mask"] == 0] = -100
         prompt_lengths = prompt_batch["attention_mask"].sum(dim=1).tolist()
@@ -143,9 +164,11 @@ class VisionSFTCollator:
 
 def train_sft(
     config: Dict[str, Any],
+    modality: str,
     resume_from_checkpoint: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> Path:
+    validate_modality(modality)
     started = time.perf_counter()
     print("[train-sft] loading training libraries", flush=True)
     stack = _load_training_stack()
@@ -161,15 +184,21 @@ def train_sft(
         raise ValueError("SFT validation manifest contains a non-val split")
     if limit is not None:
         train_records, val_records = train_records[:limit], val_records[: max(1, limit // 4)]
-    output_dir = Path(sft_config["output_dir"])
+    output_dir = Path(sft_config["output_root"]) / modality
     print(
-        f"[train-sft] train={len(train_records)} val={len(val_records)} "
+        f"[train-sft] modality={modality} train={len(train_records)} val={len(val_records)} "
         f"output={output_dir} resume={resume_from_checkpoint or 'none'}",
         flush=True,
     )
     save_effective_config(config, output_dir)
     save_run_metadata(
-        {"stage": "sft", "model": config["model"]["name"], "seed": seed}, output_dir
+        {
+            "stage": "sft",
+            "modality": modality,
+            "model": config["model"]["name"],
+            "seed": seed,
+        },
+        output_dir,
     )
     print(f"[train-sft] loading processor {config['model']['name']}", flush=True)
     processor = stack["AutoProcessor"].from_pretrained(
@@ -224,7 +253,7 @@ def train_sft(
         args=training_args,
         train_dataset=ManifestDataset(train_records),
         eval_dataset=ManifestDataset(val_records),
-        data_collator=VisionSFTCollator(processor),
+        data_collator=SFTCollator(processor, modality),
     )
     print("[train-sft] trainer starting; step loss and progress follow", flush=True)
     result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)

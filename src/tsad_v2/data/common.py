@@ -3,8 +3,35 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
+import numpy as np
+
 from ..intervals import canonicalize
 from ..io import read_jsonl
+
+
+def load_series(path: Path) -> np.ndarray:
+    if path.suffix == ".npy":
+        values = np.load(path)
+    else:
+        try:
+            values = np.loadtxt(path, dtype=np.float64)
+        except ValueError:
+            values = np.loadtxt(path, dtype=np.float64, delimiter=",")
+    values = np.asarray(values, dtype=np.float64).reshape(-1)
+    if not len(values) or not np.isfinite(values).all():
+        raise ValueError(f"series is empty or non-finite: {path}")
+    return values
+
+
+def record_values(record: Dict[str, Any]) -> np.ndarray:
+    values = load_series(Path(record["series_path"]))
+    start = int(record.get("window_start", 0))
+    end = int(record.get("window_end", start + int(record["length"])))
+    if len(values) == int(record["length"]):
+        return values
+    if not (0 <= start < end <= len(values)):
+        raise ValueError(f"invalid window [{start}, {end}) for series of length {len(values)}")
+    return values[start:end]
 
 
 def window_starts(start: int, end: int, size: int, stride: int) -> List[int]:
@@ -37,6 +64,9 @@ def validate_training_records(records: Sequence[Dict[str, Any]]) -> None:
         image_path = Path(record["image_path"])
         if not image_path.exists():
             raise FileNotFoundError(f"missing image for {sample_id}: {image_path}")
+        series_path = Path(record["series_path"])
+        if not series_path.exists():
+            raise FileNotFoundError(f"missing series for {sample_id}: {series_path}")
         canonicalize(record.get("intervals", []), lower=0, upper=int(record["length"]))
 
 
@@ -44,4 +74,3 @@ def load_training_manifest(path: Path) -> List[Dict[str, Any]]:
     records = read_jsonl(path)
     validate_training_records(records)
     return records
-

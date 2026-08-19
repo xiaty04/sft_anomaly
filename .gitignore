@@ -10,6 +10,7 @@ venv/
 # Data & outputs (AutoDL data disk; do not commit large files)
 /data/
 /outputs/
+/results/
 /checkpoints/
 *.tar
 *.tar.gz
@@ -29,10 +30,9 @@ build/
 dist/
 wandb/
 
-# Local-only documentation and legacy material
+# Local-only documentation and agent instructions
 *.md
 /docs/
-/v1/
 /LICENSE
 *.pdf
 *.ipynb

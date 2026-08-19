@@ -10,6 +10,7 @@ from PIL import Image
 from .config import save_effective_config, save_run_metadata, set_seed
 from .intervals import parse_interval_output, to_jsonable
 from .io import append_jsonl, read_jsonl
+from .modalities import text_prompt, validate_modality
 from .prompts import interval_prompt
 
 
@@ -67,22 +68,37 @@ def _load_model(model_name: str, adapter_path: Optional[str], model_config: Dict
     return model, processor, torch
 
 
-def _generate(model: Any, processor: Any, torch: Any, record: Dict[str, Any], config: Dict[str, Any]) -> str:
+def _generate(
+    model: Any,
+    processor: Any,
+    torch: Any,
+    record: Dict[str, Any],
+    config: Dict[str, Any],
+    modality: str,
+) -> str:
     start = int(record.get("window_start", 0))
     end = int(record.get("window_end", record["length"]))
-    with Image.open(record["image_path"]) as source:
-        image = source.convert("RGB").copy()
+    image = None
+    if modality == "vision":
+        with Image.open(record["image_path"]) as source:
+            image = source.convert("RGB").copy()
+        content = [
+            {"type": "image", "image": image},
+            {"type": "text", "text": interval_prompt(start, end)},
+        ]
+    else:
+        content = [{"type": "text", "text": text_prompt(record)}]
     messages = [
         {
             "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": interval_prompt(start, end)},
-            ],
+            "content": content,
         }
     ]
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = processor(text=[text], images=[image], padding=True, return_tensors="pt")
+    processor_kwargs = {"text": [text], "padding": True, "return_tensors": "pt"}
+    if image is not None:
+        processor_kwargs["images"] = [image]
+    inputs = processor(**processor_kwargs)
     device = next(model.parameters()).device
     inputs = {key: value.to(device) if hasattr(value, "to") else value for key, value in inputs.items()}
     temperature = float(config.get("temperature", 0.0))
@@ -101,10 +117,12 @@ def run_inference(
     config: Dict[str, Any],
     manifest_path: Path,
     output_path: Path,
+    modality: str,
     model_name: Optional[str] = None,
     adapter_path: Optional[str] = None,
     limit: Optional[int] = None,
 ) -> None:
+    validate_modality(modality)
     model_config = dict(config["model"])
     model_name = model_name or model_config["name"]
     seed = int(config["project"].get("seed", 3407))
@@ -123,13 +141,14 @@ def run_inference(
             "model": model_name,
             "adapter_path": adapter_path,
             "manifest": str(manifest_path),
+            "modality": modality,
             "python": platform.python_version(),
             "seed": seed,
         },
         output_path.parent,
     )
     print(
-        f"[infer] manifest={manifest_path} selected={len(records)} "
+        f"[infer] modality={modality} manifest={manifest_path} selected={len(records)} "
         f"completed={len(records) - len(pending)} pending={len(pending)} output={output_path}",
         flush=True,
     )
@@ -154,7 +173,7 @@ def run_inference(
         end = int(record.get("window_end", record["length"]))
         print(f"[infer] {processed}/{len(pending)} {record['sample_id']} ...", flush=True)
         started = time.perf_counter()
-        output = _generate(model, processor, torch, record, model_config)
+        output = _generate(model, processor, torch, record, model_config, modality)
         parsed = parse_interval_output(output, lower=start, upper=end)
         append_jsonl(
             output_path,
@@ -169,6 +188,7 @@ def run_inference(
                 "parse_error": parsed.error,
                 "latency_seconds": time.perf_counter() - started,
                 "model": model_name,
+                "modality": modality,
             },
         )
         elapsed = time.perf_counter() - run_started

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 
-def interval_prompt(start: int, end: int) -> str:
+def interval_prompt(start: int, end: int, input_name: str = "time-series plot") -> str:
     return (
-        "Detect every anomalous interval in the time-series plot. "
+        f"Detect every anomalous interval in the {input_name}. "
         f"The visible x-axis coordinates run from {start} to {end - 1}. "
         "Use half-open intervals [start, end), so a single anomalous point i is "
         "represented as {\"start\": i, \"end\": i+1}. "
@@ -11,4 +11,3 @@ def interval_prompt(start: int, end: int) -> str:
         "Use [] when there is no anomaly. Example: "
         '[{"start":120,"end":145}]'
     )
-

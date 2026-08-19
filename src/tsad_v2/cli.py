@@ -24,30 +24,32 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate-manifest", help="validate a training manifest")
     validate.add_argument("manifest", type=Path)
 
-    infer = subparsers.add_parser("infer", help="run local VLM inference")
+    infer = subparsers.add_parser("infer", help="run local text or vision model inference")
     infer.add_argument("manifest", type=Path)
     infer.add_argument("output", type=Path)
     infer.add_argument("--model")
     infer.add_argument("--adapter")
+    infer.add_argument("--modality", required=True, choices=("text", "vision"))
     infer.add_argument("--limit", type=int)
+
+    isolation = subparsers.add_parser("infer-isolation-forest", help="run the numeric baseline")
+    isolation.add_argument("manifest", type=Path)
+    isolation.add_argument("output", type=Path)
+    isolation.add_argument("--limit", type=int)
 
     evaluate = subparsers.add_parser("evaluate", help="evaluate predictions with the unified protocol")
     evaluate.add_argument("manifest", type=Path)
     evaluate.add_argument("predictions", type=Path)
     evaluate.add_argument("output_dir", type=Path)
 
-    compare = subparsers.add_parser("compare", help="compare baseline/SFT/RL summary files")
+    compare = subparsers.add_parser("compare", help="compare C0/T0/V0/T1/V1 summary files")
     compare.add_argument("reports", nargs="+", type=Path)
     compare.add_argument("--output", required=True, type=Path)
 
-    sft = subparsers.add_parser("train-sft", help="train a QLoRA SFT adapter")
+    sft = subparsers.add_parser("train-sft", help="train a text or vision QLoRA SFT adapter")
+    sft.add_argument("--modality", required=True, choices=("text", "vision"))
     sft.add_argument("--resume")
     sft.add_argument("--limit", type=int)
-
-    rl = subparsers.add_parser("train-rl", help="continue an SFT adapter with interval-level GRPO")
-    rl.add_argument("--sft-adapter", required=True, type=Path)
-    rl.add_argument("--resume")
-    rl.add_argument("--limit", type=int)
     return parser
 
 
@@ -63,7 +65,10 @@ def main() -> None:
         from .data.synthetic import generate_dataset
 
         paths = generate_dataset(
-            config["synthetic"], config.get("render", {}), int(config["project"].get("seed", 3407))
+            config["synthetic"],
+            config.get("render", {}),
+            int(config["project"].get("seed", 3407)),
+            config["ucr"],
         )
         print("\n".join(str(path) for path in paths))
     elif args.command == "prepare-ucr":
@@ -78,7 +83,13 @@ def main() -> None:
     elif args.command == "infer":
         from .inference import run_inference
 
-        run_inference(config, args.manifest, args.output, args.model, args.adapter, args.limit)
+        run_inference(
+            config, args.manifest, args.output, args.modality, args.model, args.adapter, args.limit
+        )
+    elif args.command == "infer-isolation-forest":
+        from .baselines.isolation_forest import run_isolation_forest
+
+        run_isolation_forest(config, args.manifest, args.output, args.limit)
     elif args.command == "evaluate":
         from .evaluation import evaluate_predictions
 
@@ -91,15 +102,10 @@ def main() -> None:
     elif args.command == "train-sft":
         from .training.sft import train_sft
 
-        print(train_sft(config, args.resume, args.limit))
-    elif args.command == "train-rl":
-        from .training.rl import train_rl
-
-        print(train_rl(config, args.sft_adapter, args.resume, args.limit))
+        print(train_sft(config, args.modality, args.resume, args.limit))
     else:
         parser.error(f"unknown command: {args.command}")
 
 
 if __name__ == "__main__":
     main()
-

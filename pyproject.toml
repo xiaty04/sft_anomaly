@@ -5,25 +5,24 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "tsad-v2"
 version = "0.1.0"
-description = "Single-GPU visual time-series anomaly interval detection pipeline"
+description = "Single-GPU paired text/vision time-series anomaly interval detection pipeline"
 requires-python = ">=3.9"
 dependencies = [
   "matplotlib>=3.8",
   "numpy>=1.26,<3",
   "Pillow>=10",
   "PyYAML>=6",
+  "scikit-learn>=1.4,<2",
 ]
 
 [project.optional-dependencies]
 train = [
   "accelerate>=1.2",
   "bitsandbytes>=0.43",
-  "datasets>=3.2",
   "peft>=0.14",
   "qwen-vl-utils>=0.0.10",
   "torch>=2.4",
-  "transformers>=4.49",
-  "trl>=0.16",
+  "transformers>=4.49,<5",
 ]
 dev = ["pytest>=8", "ruff>=0.9"]
 
