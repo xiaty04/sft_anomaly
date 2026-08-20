@@ -4,7 +4,8 @@ from pathlib import Path
 
 import numpy as np
 
-from tsad_v2.data.synthetic import generate_sample, split_backgrounds
+from tsad_v2.data.common import load_training_manifest
+from tsad_v2.data.synthetic import generate_sample, generate_split, split_backgrounds
 from tsad_v2.data.ucr import parse_ucr_filename, prepare_ucr
 from tsad_v2.io import read_jsonl
 
@@ -44,6 +45,7 @@ class DataTests(unittest.TestCase):
             self.assertEqual(series[0]["input_start"], 5)
             self.assertEqual(series[0]["input_end"], 20)
             self.assertEqual(series[0]["length"], 15)
+            self.assertEqual(series[0]["text_max_points"], 8)
             self.assertTrue(Path(series[0]["image_path"]).exists())
             self.assertEqual(Path(series[0]["series_path"]), source.resolve())
             self.assertFalse((root / "processed" / "windows.jsonl").exists())
@@ -90,6 +92,28 @@ class DataTests(unittest.TestCase):
         val_ids = {item[0] for item in val}
         self.assertFalse(train_ids & val_ids)
         self.assertEqual(len(train) + len(val), len(backgrounds))
+
+    def test_synthetic_manifest_records_text_point_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = generate_split(
+                split="train",
+                count=1,
+                config={
+                    "output_dir": str(root / "synthetic"),
+                    "length": 32,
+                    "text_max_points": 8,
+                    "normal_probability": 1.0,
+                    "max_intervals": 1,
+                    "anomaly_types": ["range"],
+                },
+                render_config={"width": 300, "height": 120, "dpi": 60},
+                base_seed=3407,
+                backgrounds=[("ucr_001", np.linspace(0, 1, 64))],
+            )
+            records = load_training_manifest(manifest_path)
+            self.assertEqual(records[0]["length"], 32)
+            self.assertEqual(records[0]["text_max_points"], 8)
 
 
 if __name__ == "__main__":

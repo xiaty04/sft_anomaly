@@ -128,17 +128,26 @@ def generate_split(
     image_dir, series_dir = output_dir / "images" / split, output_dir / "series" / split
     image_dir.mkdir(parents=True, exist_ok=True)
     series_dir.mkdir(parents=True, exist_ok=True)
+    target_length = int(config.get("length", 1000))
+    text_max_points = int(config.get("text_max_points", target_length))
+    if not 4 <= text_max_points <= target_length:
+        raise ValueError(
+            f"synthetic.text_max_points must be within [4, {target_length}]"
+        )
     anomaly_types = list(config.get("anomaly_types", ["point", "range", "frequency", "trend"]))
     split_offset = 0 if split == "train" else 10_000_000
     records = []
     started = time_module.perf_counter()
-    print(f"[generate-synthetic] generating {split} split: {count} samples", flush=True)
+    print(
+        f"[generate-synthetic] generating {split} split: {count} samples "
+        f"length={target_length} text_max_points={text_max_points}",
+        flush=True,
+    )
     progress_step = 1 if count <= 20 else 10
     for index in range(count):
         seed = base_seed + split_offset + index
         background_id, source_values = backgrounds[index % len(backgrounds)]
         background_rng = np.random.default_rng(seed + 50_000_000)
-        target_length = int(config.get("length", 1000))
         if len(source_values) >= target_length:
             maximum_start = len(source_values) - target_length
             source_start = int(background_rng.integers(0, maximum_start + 1))
@@ -177,6 +186,7 @@ def generate_split(
                 "source": "synthetic",
                 "split": split,
                 "length": len(series),
+                "text_max_points": text_max_points,
                 "window_start": 0,
                 "window_end": len(series),
                 "series_path": str(series_path.resolve()),

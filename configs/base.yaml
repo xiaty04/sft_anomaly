@@ -36,6 +36,7 @@ isolation_forest:
 synthetic:
   output_dir: data/processed/synthetic
   length: 1000
+  text_max_points: 256
   train_samples: 1600
   val_samples: 400
   normal_probability: 0.20

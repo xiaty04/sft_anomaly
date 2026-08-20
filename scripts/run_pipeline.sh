@@ -21,6 +21,7 @@ SCRIPT_PATH="$REPO_ROOT/scripts/run_pipeline.sh"
 DATA_ROOT="${TSAD_DATA_ROOT:-/root/autodl-tmp}"
 SESSION_NAME="${TSAD_TMUX_SESSION:-tsad}"
 RUN_ID="${TSAD_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 
 if [ "$IN_TMUX" -eq 0 ] && [ -z "${TMUX:-}" ]; then
   command -v tmux >/dev/null 2>&1 || {
@@ -28,9 +29,10 @@ if [ "$IN_TMUX" -eq 0 ] && [ -z "${TMUX:-}" ]; then
     exit 1
   }
   WINDOW_NAME="${MODE}-${RUN_ID}"
-  printf -v TMUX_COMMAND \
-    'TSAD_RUN_ID=%q bash %q %q --inside-tmux; status=$?; echo; echo "[pipeline] status=$status"; exec bash' \
-    "$RUN_ID" "$SCRIPT_PATH" "$MODE"
+  TMUX_FORMAT='TSAD_RUN_ID=%q PYTORCH_CUDA_ALLOC_CONF=%q bash %q %q --inside-tmux; '
+  TMUX_FORMAT+='status=$?; echo; echo "[pipeline] status=$status"; exec bash'
+  printf -v TMUX_COMMAND "$TMUX_FORMAT" \
+    "$RUN_ID" "$CUDA_ALLOC_CONF" "$SCRIPT_PATH" "$MODE"
   if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     tmux new-window -d -t "$SESSION_NAME" -n "$WINDOW_NAME" "$TMUX_COMMAND"
   else
@@ -62,6 +64,7 @@ export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$DATA_ROOT/cache/pip}"
 export TMPDIR="${TMPDIR:-$DATA_ROOT/tmp}"
 export TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF="$CUDA_ALLOC_CONF"
 
 CURRENT_STAGE="startup"
 STAGE_STARTED=$SECONDS
@@ -158,6 +161,7 @@ COMPARISON="$EVAL_ROOT/comparison.csv"
 
 log "TSAD v2 baseline-to-SFT pipeline mode=$MODE"
 log "run_id=$RUN_ID commit=$(git rev-parse --short HEAD) log=$LOG_FILE"
+log "pytorch_cuda_alloc_conf=$PYTORCH_CUDA_ALLOC_CONF"
 nvidia-smi
 
 stage "1/10 prepare one sample per UCR series"

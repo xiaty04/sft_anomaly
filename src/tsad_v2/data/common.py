@@ -60,13 +60,21 @@ def validate_training_records(records: Sequence[Dict[str, Any]]) -> None:
             raise ValueError(f"training only accepts synthetic data: {sample_id}")
         if record.get("split") not in {"train", "val"}:
             raise ValueError(f"training record has forbidden split: {sample_id}")
+        length = int(record["length"])
+        text_max_points = record.get("text_max_points")
+        if not isinstance(text_max_points, int) or isinstance(text_max_points, bool):
+            raise ValueError(f"training record has invalid text_max_points: {sample_id}")
+        if not 4 <= text_max_points <= length:
+            raise ValueError(
+                f"training text_max_points must be within [4, {length}]: {sample_id}"
+            )
         image_path = Path(record["image_path"])
         if not image_path.exists():
             raise FileNotFoundError(f"missing image for {sample_id}: {image_path}")
         series_path = Path(record["series_path"])
         if not series_path.exists():
             raise FileNotFoundError(f"missing series for {sample_id}: {series_path}")
-        canonicalize(record.get("intervals", []), lower=0, upper=int(record["length"]))
+        canonicalize(record.get("intervals", []), lower=0, upper=length)
 
 
 def load_training_manifest(path: Path) -> List[Dict[str, Any]]:
