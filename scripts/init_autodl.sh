@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # Prepare a fresh AutoDL instance through bounded one-series-one-sample smoke inputs.
 
 DATA_ROOT="${TSAD_DATA_ROOT:-/root/autodl-tmp}"
-REPO_URL="${TSAD_REPO_URL:-https://github.com/tianyu-04/sft_anomaly.git}"
+REPO_URL="${TSAD_REPO_URL:-https://github.com/xiaty04/sft_anomaly.git}"
 REPO_DIR="${TSAD_REPO_DIR:-$DATA_ROOT/sft_anomaly}"
 SESSION_NAME="${TSAD_TMUX_SESSION:-tsad}"
 UCR_URL="${TSAD_UCR_URL:-https://www.cs.ucr.edu/~eamonn/time_series_data_2018/UCR_TimeSeriesAnomalyDatasets2021.zip}"
