@@ -12,13 +12,34 @@ RUN_ID="${TSAD_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 IN_TMUX=0
 NO_TMUX=0
+RESUME_MODE=""
 
-case "${1:-}" in
-  "") ;;
-  --inside-tmux) IN_TMUX=1 ;;
-  --no-tmux) NO_TMUX=1 ;;
-  *) echo "Usage: bash $0 [--no-tmux]" >&2; exit 2 ;;
-esac
+usage() {
+  echo "Usage: bash $0 [--no-tmux] [--resume {smoke|full}]" >&2
+  exit 2
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --inside-tmux)
+      IN_TMUX=1
+      shift
+      ;;
+    --no-tmux)
+      NO_TMUX=1
+      shift
+      ;;
+    --resume)
+      [ "$#" -ge 2 ] || usage
+      RESUME_MODE="$2"
+      [ "$RESUME_MODE" = "smoke" ] || [ "$RESUME_MODE" = "full" ] || usage
+      shift 2
+      ;;
+    *)
+      usage
+      ;;
+  esac
+done
 
 if [ "$IN_TMUX" -eq 0 ] && [ "$NO_TMUX" -eq 0 ] && [ -z "${TMUX:-}" ]; then
   if ! command -v tmux >/dev/null 2>&1; then
@@ -26,9 +47,16 @@ if [ "$IN_TMUX" -eq 0 ] && [ "$NO_TMUX" -eq 0 ] && [ -z "${TMUX:-}" ]; then
     apt-get install -y tmux
   fi
   WINDOW_NAME="init-${RUN_ID}"
-  printf -v TMUX_COMMAND \
-    'TSAD_RUN_ID=%q bash %q --inside-tmux; status=$?; echo; echo "[init] status=$status"; exec bash' \
-    "$RUN_ID" "$SCRIPT_PATH"
+  if [ -n "$RESUME_MODE" ]; then
+    WINDOW_NAME="resume-${RESUME_MODE}-${RUN_ID}"
+    printf -v TMUX_COMMAND \
+      'TSAD_RUN_ID=%q bash %q --inside-tmux --resume %q; status=$?; echo; echo "[init] status=$status"; exec bash' \
+      "$RUN_ID" "$SCRIPT_PATH" "$RESUME_MODE"
+  else
+    printf -v TMUX_COMMAND \
+      'TSAD_RUN_ID=%q bash %q --inside-tmux; status=$?; echo; echo "[init] status=$status"; exec bash' \
+      "$RUN_ID" "$SCRIPT_PATH"
+  fi
   if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
     tmux new-window -d -t "$SESSION_NAME" -n "$WINDOW_NAME" "$TMUX_COMMAND"
   else
@@ -143,4 +171,9 @@ log "ucr_smoke_series_samples=$UCR_SMOKE_SAMPLES"
 
 stage "7/7 finish"
 log "repo=$REPO_DIR venv=$REPO_DIR/.venv log=$LOG_FILE"
-log "next=bash scripts/run_pipeline.sh smoke"
+if [ -n "$RESUME_MODE" ]; then
+  log "resume_mode=$RESUME_MODE launching=scripts/run_pipeline.sh"
+  TSAD_RUN_ID="$RUN_ID" bash scripts/run_pipeline.sh "$RESUME_MODE"
+else
+  log "next=bash scripts/run_pipeline.sh smoke"
+fi
