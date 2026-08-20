@@ -18,31 +18,35 @@ class DataTests(unittest.TestCase):
         self.assertEqual(metadata["name"], "DISTORTED_demo_name")
         self.assertEqual(metadata["anomaly_end_raw"], 12)
 
-    def test_prepare_ucr_creates_series_and_windows(self):
+    def test_prepare_ucr_creates_one_full_test_sample_per_series(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             raw = root / "raw"
             raw.mkdir()
             source = raw / "001_UCR_Anomaly_demo_5_10_12.txt"
             np.savetxt(source, np.linspace(0, 1, 20))
-            series_path, windows_path = prepare_ucr(
+            series_path = prepare_ucr(
                 {
                     "raw_dir": str(raw),
                     "output_dir": str(root / "processed"),
                     "filename_index_base": 0,
                     "anomaly_end_inclusive": True,
                     "train_end_is_count": True,
-                    "window_size": 10,
-                    "stride": 5,
+                    "text_max_points": 8,
                 },
                 {"width": 300, "height": 120, "dpi": 60},
             )
             series = read_jsonl(series_path)
-            windows = read_jsonl(windows_path)
+            self.assertEqual(len(series), 1)
             self.assertEqual(series[0]["intervals"], [{"start": 10, "end": 13}])
-            self.assertEqual(len(windows), 2)
-            self.assertTrue(Path(windows[0]["image_path"]).exists())
-            self.assertEqual(Path(windows[0]["series_path"]), source.resolve())
+            self.assertEqual(series[0]["sample_id"], "ucr_001")
+            self.assertEqual(series[0]["input_unit"], "series")
+            self.assertEqual(series[0]["input_start"], 5)
+            self.assertEqual(series[0]["input_end"], 20)
+            self.assertEqual(series[0]["length"], 15)
+            self.assertTrue(Path(series[0]["image_path"]).exists())
+            self.assertEqual(Path(series[0]["series_path"]), source.resolve())
+            self.assertFalse((root / "processed" / "windows.jsonl").exists())
 
     def test_prepare_ucr_honors_smoke_limits(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -52,22 +56,18 @@ class DataTests(unittest.TestCase):
             for archive_id in ("001", "002"):
                 source = raw / f"{archive_id}_UCR_Anomaly_demo_5_10_12.txt"
                 np.savetxt(source, np.linspace(0, 1, 30))
-            series_path, windows_path = prepare_ucr(
+            series_path = prepare_ucr(
                 {
                     "raw_dir": str(raw),
                     "output_dir": str(root / "processed"),
                     "filename_index_base": 0,
                     "anomaly_end_inclusive": True,
                     "train_end_is_count": True,
-                    "window_size": 10,
-                    "stride": 5,
                     "max_series": 1,
-                    "max_windows_per_series": 1,
                 },
                 {"width": 300, "height": 120, "dpi": 60},
             )
             self.assertEqual(len(read_jsonl(series_path)), 1)
-            self.assertEqual(len(read_jsonl(windows_path)), 1)
 
     def test_synthetic_generation_is_reproducible(self):
         args = dict(

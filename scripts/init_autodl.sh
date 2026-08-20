@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Prepare a fresh AutoDL instance through the bounded UCR smoke inputs.
+# Prepare a fresh AutoDL instance through bounded one-series-one-sample smoke inputs.
 
 DATA_ROOT="${TSAD_DATA_ROOT:-/root/autodl-tmp}"
 REPO_URL="${TSAD_REPO_URL:-https://github.com/tianyu-04/sft_anomaly.git}"
@@ -44,6 +44,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 export PYTHONUNBUFFERED=1
 export HF_HOME="${HF_HOME:-$DATA_ROOT/cache/huggingface}"
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$DATA_ROOT/cache/pip}"
 export TMPDIR="${TMPDIR:-$DATA_ROOT/tmp}"
 export TOKENIZERS_PARALLELISM=false
@@ -130,10 +131,15 @@ UCR_COUNT="$(find data/raw/ucr -maxdepth 1 -type f -name '*.txt' | wc -l | tr -d
 [ "$UCR_COUNT" -gt 0 ] || { echo "No UCR files extracted." >&2; exit 1; }
 log "ucr_files=$UCR_COUNT"
 
-stage "6/7 prepare bounded paired UCR smoke inputs"
+stage "6/7 prepare four whole-series paired UCR smoke inputs"
 python -m tsad_v2 --config configs/base.yaml --config configs/smoke.yaml prepare-ucr
 test -s data/processed/ucr_smoke/series.jsonl
-test -s data/processed/ucr_smoke/windows.jsonl
+UCR_SMOKE_SAMPLES="$(wc -l < data/processed/ucr_smoke/series.jsonl | tr -d ' ')"
+[ "$UCR_SMOKE_SAMPLES" -eq 4 ] || {
+  echo "Expected 4 UCR smoke series samples, found $UCR_SMOKE_SAMPLES." >&2
+  exit 1
+}
+log "ucr_smoke_series_samples=$UCR_SMOKE_SAMPLES"
 
 stage "7/7 finish"
 log "repo=$REPO_DIR venv=$REPO_DIR/.venv log=$LOG_FILE"

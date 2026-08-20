@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np
 
@@ -23,29 +23,28 @@ def load_series(path: Path) -> np.ndarray:
     return values
 
 
+def record_bounds(record: Dict[str, Any]) -> Tuple[int, int]:
+    start = int(record.get("input_start", record.get("window_start", 0)))
+    end = int(
+        record.get(
+            "input_end",
+            record.get("window_end", start + int(record["length"])),
+        )
+    )
+    return start, end
+
+
 def record_values(record: Dict[str, Any]) -> np.ndarray:
     values = load_series(Path(record["series_path"]))
-    start = int(record.get("window_start", 0))
-    end = int(record.get("window_end", start + int(record["length"])))
-    if len(values) == int(record["length"]):
-        return values
+    start, end = record_bounds(record)
     if not (0 <= start < end <= len(values)):
-        raise ValueError(f"invalid window [{start}, {end}) for series of length {len(values)}")
-    return values[start:end]
-
-
-def window_starts(start: int, end: int, size: int, stride: int) -> List[int]:
-    if size <= 0 or stride <= 0:
-        raise ValueError("window size and stride must be positive")
-    if end <= start:
-        return []
-    if end - start <= size:
-        return [start]
-    starts = list(range(start, end - size + 1, stride))
-    final_start = end - size
-    if starts[-1] != final_start:
-        starts.append(final_start)
-    return starts
+        raise ValueError(f"invalid input range [{start}, {end}) for series of length {len(values)}")
+    selected = values[start:end]
+    if len(selected) != int(record["length"]):
+        raise ValueError(
+            f"record length mismatch: {len(selected)} vs declared {record['length']}"
+        )
+    return selected
 
 
 def validate_training_records(records: Sequence[Dict[str, Any]]) -> None:

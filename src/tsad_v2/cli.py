@@ -19,7 +19,9 @@ def _parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("generate-synthetic", help="generate train/val synthetic data")
-    subparsers.add_parser("prepare-ucr", help="convert UCR files and render inference windows")
+    subparsers.add_parser(
+        "prepare-ucr", help="create one full test-region inference sample per UCR series"
+    )
 
     validate = subparsers.add_parser("validate-manifest", help="validate a training manifest")
     validate.add_argument("manifest", type=Path)
@@ -74,7 +76,7 @@ def main() -> None:
     elif args.command == "prepare-ucr":
         from .data.ucr import prepare_ucr
 
-        print("\n".join(str(path) for path in prepare_ucr(config["ucr"], config.get("render", {}))))
+        print(prepare_ucr(config["ucr"], config.get("render", {})))
     elif args.command == "validate-manifest":
         from .data.common import load_training_manifest
 

@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from PIL import Image
 
 from .config import save_effective_config, save_run_metadata, set_seed
+from .data.common import record_bounds
 from .intervals import parse_interval_output, to_jsonable
 from .io import append_jsonl, read_jsonl
 from .modalities import text_prompt, validate_modality
@@ -76,8 +77,7 @@ def _generate(
     config: Dict[str, Any],
     modality: str,
 ) -> str:
-    start = int(record.get("window_start", 0))
-    end = int(record.get("window_end", record["length"]))
+    start, end = record_bounds(record)
     image = None
     if modality == "vision":
         with Image.open(record["image_path"]) as source:
@@ -169,8 +169,7 @@ def run_inference(
     )
     run_started = time.perf_counter()
     for processed, record in enumerate(pending, start=1):
-        start = int(record.get("window_start", 0))
-        end = int(record.get("window_end", record["length"]))
+        start, end = record_bounds(record)
         print(f"[infer] {processed}/{len(pending)} {record['sample_id']} ...", flush=True)
         started = time.perf_counter()
         output = _generate(model, processor, torch, record, model_config, modality)
@@ -180,8 +179,9 @@ def run_inference(
             {
                 "sample_id": record["sample_id"],
                 "series_id": record.get("series_id", record["sample_id"]),
-                "window_start": start,
-                "window_end": end,
+                "input_unit": record.get("input_unit", "sample"),
+                "input_start": start,
+                "input_end": end,
                 "raw_output": output,
                 "intervals": to_jsonable(parsed.intervals),
                 "parse_valid": parsed.valid,

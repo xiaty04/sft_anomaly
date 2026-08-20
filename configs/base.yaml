@@ -24,8 +24,7 @@ ucr:
   filename_index_base: 0
   anomaly_end_inclusive: true
   train_end_is_count: true
-  window_size: 1000
-  stride: 500
+  text_max_points: 1024
 
 isolation_forest:
   n_estimators: 200

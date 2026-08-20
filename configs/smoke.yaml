@@ -4,10 +4,7 @@ project:
 
 ucr:
   output_dir: data/processed/ucr_smoke
-  window_size: 512
-  stride: 256
   max_series: 4
-  max_windows_per_series: 2
 
 synthetic:
   output_dir: data/processed/synthetic_smoke

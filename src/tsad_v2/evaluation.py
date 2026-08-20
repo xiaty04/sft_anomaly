@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import json
 import time
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -21,26 +20,32 @@ def evaluate_predictions(manifest_path: Path, predictions_path: Path, output_dir
         f"predictions={len(predictions)} output={output_dir}",
         flush=True,
     )
-    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    expected_ids = {record["sample_id"] for record in records}
+    if len(expected_ids) != len(records):
+        raise ValueError("evaluation manifest contains duplicate sample_id values")
+    prediction_by_id: Dict[str, Dict[str, Any]] = {}
     for prediction in predictions:
-        grouped[prediction.get("series_id", prediction["sample_id"])].append(prediction)
+        sample_id = prediction["sample_id"]
+        if sample_id not in expected_ids:
+            raise ValueError(
+                f"prediction sample_id is not present in the series manifest: {sample_id}"
+            )
+        if sample_id in prediction_by_id:
+            raise ValueError(f"duplicate prediction for series sample: {sample_id}")
+        prediction_by_id[sample_id] = prediction
     rows: List[Tuple[Dict[str, Any], SampleCounts]] = []
     details = []
     progress_step = max(1, min(25, len(records) // 10 or 1))
     for index, record in enumerate(records, start=1):
-        sample_id = record.get("series_id", record["sample_id"])
-        sample_predictions = grouped.get(sample_id, [])
-        combined = []
-        parse_valid = bool(sample_predictions) and all(
-            bool(item.get("parse_valid", False)) for item in sample_predictions
-        )
-        for prediction in sample_predictions:
-            combined.extend(prediction.get("intervals", []))
-        start = int(record.get("eval_start", record.get("window_start", 0)))
-        end = int(record.get("eval_end", record.get("window_end", record["length"])))
-        combined_intervals = canonicalize(combined, lower=start, upper=end)
+        sample_id = record["sample_id"]
+        prediction = prediction_by_id.get(sample_id)
+        parse_valid = bool(prediction) and bool(prediction.get("parse_valid", False))
+        predicted = prediction.get("intervals", []) if prediction else []
+        start = int(record.get("eval_start", record.get("input_start", 0)))
+        end = int(record.get("eval_end", record.get("input_end", record["length"])))
+        predicted_intervals = canonicalize(predicted, lower=start, upper=end)
         metrics, counts = evaluate_sample(
-            combined_intervals,
+            predicted_intervals,
             record.get("intervals", []),
             start,
             end,
@@ -50,8 +55,8 @@ def evaluate_predictions(manifest_path: Path, predictions_path: Path, output_dir
         details.append(
             {
                 "sample_id": sample_id,
-                "prediction_windows": len(sample_predictions),
-                "predicted_intervals": to_jsonable(combined_intervals),
+                "prediction_present": prediction is not None,
+                "predicted_intervals": to_jsonable(predicted_intervals),
                 "target_intervals": record.get("intervals", []),
                 **metrics,
             }
@@ -63,7 +68,7 @@ def evaluate_predictions(manifest_path: Path, predictions_path: Path, output_dir
         {
             "manifest": str(manifest_path),
             "predictions": str(predictions_path),
-            "missing_samples": sum(int(item["prediction_windows"] == 0) for item in details),
+            "missing_samples": sum(int(not item["prediction_present"]) for item in details),
         }
     )
     output_dir.mkdir(parents=True, exist_ok=True)

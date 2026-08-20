@@ -58,6 +58,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 export PYTHONUNBUFFERED=1
 export HF_HOME="${HF_HOME:-$DATA_ROOT/cache/huggingface}"
+export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export PIP_CACHE_DIR="${PIP_CACHE_DIR:-$DATA_ROOT/cache/pip}"
 export TMPDIR="${TMPDIR:-$DATA_ROOT/tmp}"
 export TOKENIZERS_PARALLELISM=false
@@ -137,31 +138,37 @@ if [ "$MODE" = "smoke" ]; then
   UCR_DIR="data/processed/ucr_smoke"
   SYNTHETIC_DIR="data/processed/synthetic_smoke"
   OUTPUT_ROOT="outputs/smoke"
+  EXPECTED_UCR_SAMPLES=4
 else
   CONFIG_ARGS=(--config configs/base.yaml)
   UCR_DIR="data/processed/ucr"
   SYNTHETIC_DIR="data/processed/synthetic"
   OUTPUT_ROOT="outputs"
+  EXPECTED_UCR_SAMPLES=250
 fi
 
-C0_DIR="$OUTPUT_ROOT/c0_isolation_forest"
-T0_DIR="$OUTPUT_ROOT/t0_text"
-V0_DIR="$OUTPUT_ROOT/v0_vision"
+EVAL_ROOT="$OUTPUT_ROOT/series_level"
+C0_DIR="$EVAL_ROOT/c0_isolation_forest"
+T0_DIR="$EVAL_ROOT/t0_text"
+V0_DIR="$EVAL_ROOT/v0_vision"
 SFT_ROOT="$OUTPUT_ROOT/sft"
-T1_DIR="$OUTPUT_ROOT/t1_text"
-V1_DIR="$OUTPUT_ROOT/v1_vision"
-COMPARISON="$OUTPUT_ROOT/comparison.csv"
+T1_DIR="$EVAL_ROOT/t1_text"
+V1_DIR="$EVAL_ROOT/v1_vision"
+COMPARISON="$EVAL_ROOT/comparison.csv"
 
 log "TSAD v2 baseline-to-SFT pipeline mode=$MODE"
 log "run_id=$RUN_ID commit=$(git rev-parse --short HEAD) log=$LOG_FILE"
 nvidia-smi
 
-stage "1/10 prepare UCR manifests"
-if [ "$MODE" = "full" ]; then
-  python -m tsad_v2 "${CONFIG_ARGS[@]}" prepare-ucr
-fi
+stage "1/10 prepare one sample per UCR series"
+python -m tsad_v2 "${CONFIG_ARGS[@]}" prepare-ucr
 test -s "$UCR_DIR/series.jsonl"
-test -s "$UCR_DIR/windows.jsonl"
+UCR_SAMPLES="$(wc -l < "$UCR_DIR/series.jsonl" | tr -d ' ')"
+[ "$UCR_SAMPLES" -eq "$EXPECTED_UCR_SAMPLES" ] || {
+  echo "Expected $EXPECTED_UCR_SAMPLES UCR series samples, found $UCR_SAMPLES." >&2
+  exit 1
+}
+log "ucr_series_samples=$UCR_SAMPLES inference_calls_per_method=$UCR_SAMPLES"
 
 stage "2/10 C0 Isolation Forest"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" infer-isolation-forest \
@@ -171,13 +178,13 @@ python -m tsad_v2 "${CONFIG_ARGS[@]}" evaluate \
 
 stage "3/10 T0 text zero-shot"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" infer \
-  "$UCR_DIR/windows.jsonl" "$T0_DIR/predictions.jsonl" --modality text
+  "$UCR_DIR/series.jsonl" "$T0_DIR/predictions.jsonl" --modality text
 python -m tsad_v2 "${CONFIG_ARGS[@]}" evaluate \
   "$UCR_DIR/series.jsonl" "$T0_DIR/predictions.jsonl" "$T0_DIR"
 
 stage "4/10 V0 vision zero-shot"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" infer \
-  "$UCR_DIR/windows.jsonl" "$V0_DIR/predictions.jsonl" --modality vision
+  "$UCR_DIR/series.jsonl" "$V0_DIR/predictions.jsonl" --modality vision
 python -m tsad_v2 "${CONFIG_ARGS[@]}" evaluate \
   "$UCR_DIR/series.jsonl" "$V0_DIR/predictions.jsonl" "$V0_DIR"
 
@@ -191,7 +198,7 @@ run_sft text "$SFT_ROOT/text/final_adapter"
 
 stage "7/10 T1 text SFT evaluation"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" infer \
-  "$UCR_DIR/windows.jsonl" "$T1_DIR/predictions.jsonl" --modality text \
+  "$UCR_DIR/series.jsonl" "$T1_DIR/predictions.jsonl" --modality text \
   --adapter "$SFT_ROOT/text/final_adapter"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" evaluate \
   "$UCR_DIR/series.jsonl" "$T1_DIR/predictions.jsonl" "$T1_DIR"
@@ -201,7 +208,7 @@ run_sft vision "$SFT_ROOT/vision/final_adapter"
 
 stage "9/10 V1 vision SFT evaluation"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" infer \
-  "$UCR_DIR/windows.jsonl" "$V1_DIR/predictions.jsonl" --modality vision \
+  "$UCR_DIR/series.jsonl" "$V1_DIR/predictions.jsonl" --modality vision \
   --adapter "$SFT_ROOT/vision/final_adapter"
 python -m tsad_v2 "${CONFIG_ARGS[@]}" evaluate \
   "$UCR_DIR/series.jsonl" "$V1_DIR/predictions.jsonl" "$V1_DIR"

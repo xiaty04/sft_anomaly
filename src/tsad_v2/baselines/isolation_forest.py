@@ -97,8 +97,9 @@ def run_isolation_forest(
             {
                 "sample_id": record["sample_id"],
                 "series_id": record["series_id"],
-                "window_start": test_start,
-                "window_end": len(values),
+                "input_unit": "series",
+                "input_start": test_start,
+                "input_end": len(values),
                 "raw_output": None,
                 "intervals": to_jsonable(intervals),
                 "parse_valid": True,
